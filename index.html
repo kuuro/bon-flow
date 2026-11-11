@@ -155,7 +155,7 @@ const RATINGS=['good','fair','bad'],TRIG=['on_enter','on_approach','on_condition
 const EXPR=['happy','shy','sad','scared','neutral'],TYPES=['say','ask','minigame','cutscene','result'];
 const TL={say:'Say',ask:'Ask',minigame:'Minigame',cutscene:'Cutscene',result:'Result'};
 let S,ISSUES=[],undoStack=[],lastJSON='',saveTimer=null,snapTaken=false;
-const ui={tab:'write',sel:{t:'event',id:null},scope:'event',play:null,artFilter:'all',devLevel:'',checksOpen:false,saved:true,openRes:new Set()};
+const ui={tab:'write',sel:{t:'event',id:null},scope:'event',play:null,artFilter:'all',hist:{doc:'',rows:null,sel:null,loading:false,msg:''},devLevel:'',checksOpen:false,saved:true,openRes:new Set()};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clone=o=>JSON.parse(JSON.stringify(o));
@@ -179,12 +179,18 @@ function load(){
   S=normalize(d&&d.levels?d:clone(DEFAULT));
   lastJSON=JSON.stringify(S);
 }
+/* result screens: the old "illustration" and "animation" boxes became one shared notes box */
+function fixRes(r){
+  if(!r)return;
+  if(r.notes===undefined){const p=[];if(r.illustration)p.push('Illustration: '+r.illustration);if(r.animation)p.push('Animation: '+r.animation);r.notes=p.join('\n')}
+  delete r.illustration;delete r.animation;
+}
 function normalize(d){
   d.speakers=d.speakers||SPEAKERS_DEFAULT.slice();
   d.levels=d.levels||[];d.tasks=d.tasks||[];
   d.levels.forEach(l=>{l.scenes=l.scenes||[];l.quiz=l.quiz||[];
     l.scenes.forEach(s=>{s.gameobjects=s.gameobjects||[];s.events=s.events||[];
-      s.events.forEach(e=>{e.steps=e.steps||[];e.steps.forEach(st=>{st.options=st.options||[];})})})});
+      s.events.forEach(e=>{e.steps=e.steps||[];e.steps.forEach(st=>{st.options=st.options||[];fixRes(st.result);st.options.forEach(o=>fixRes(o.result))})})})});
   return d;
 }
 function save(){
@@ -221,7 +227,7 @@ const allIds=(kind)=>{
   if(kind==='scene')return S.levels.flatMap(l=>l.scenes.map(s=>s.id));
   return allEvents().map(x=>x.ev.id);
 };
-const emptyResult=()=>({title:'',text:'',tip:'',expression:'happy',illustration:'',animation:'',artDone:false});
+const emptyResult=()=>({title:'',text:'',tip:'',expression:'happy',notes:'',artDone:false});
 function mkOpt(st,rating,next){return{id:uid(st.id+'_O',st.options.map(o=>o.id)),text:'',rating,next,errorOverride:null,result:null}}
 function mkStep(ev,type){
   const st={id:uid(ev.id+'_B',ev.steps.map(s=>s.id)),type,speaker:(type==='say'||type==='ask')?'Bon':'',text:'',options:[],result:null,artDone:false};
@@ -265,9 +271,9 @@ function runChecks(){
   return out.concat(mediaIssues());
 }
 function resCheck(r,m,st,add){
-  if(!r.title.trim()||!r.text.trim()||!r.tip.trim())add('error',m+'result needs title, text and tip',st);
+  if(!r.title.trim()||!r.text.trim())add('error',m+'result needs a title and text',st);
   if(r.text.length>160)add('warn',m+'result text is over 160 characters ('+r.text.length+')',st);
-  if(r.tip.length>60)add('warn',m+'tip is over 60 characters ('+r.tip.length+')',st);
+  if((r.tip||'').length>60)add('warn',m+'tip is over 60 characters ('+r.tip.length+')',st);
 }
 
 /* ---------- html helpers ---------- */
@@ -301,7 +307,7 @@ function autosize(t){t.style.height='auto';t.style.height=Math.max(34,t.scrollHe
 function renderTop(){
   const e=ISSUES.filter(x=>x.sev==='error').length,w=ISSUES.filter(x=>x.sev==='warn').length;
   $('#top').innerHTML='<h1>Bon Day - Flow Writer</h1><div class="tabs">'+
-   ['write:Write','artist:Artist','dev:Dev'].map(t=>{const[k,l]=t.split(':');return '<button class="tab'+(ui.tab===k?' on':'')+'" data-act="tab" data-v="'+k+'">'+l+'</button>'}).join('')+'</div><span class="sp"></span>'+
+   ['write:Write','speakers:Speakers','artist:Artist','history:History','dev:Dev'].map(t=>{const[k,l]=t.split(':');return '<button class="tab'+(ui.tab===k?' on':'')+'" data-act="tab" data-v="'+k+'">'+l+'</button>'}).join('')+'</div><span class="sp"></span>'+
    peersTopHTML()+(()=>{const m=mediaStats();return '<span class="hint" title="Text fields with VI text: how many have EN text, VI audio, EN audio">EN '+m.en+'/'+m.tot+' | Audio VI '+m.av+' EN '+m.ae+'</span>'})()+'<span id="saved" class="'+(SB.status==='error'?'bad':'')+'">'+statusText()+'</span>'+
    '<button class="btn" data-act="undo"'+(undoStack.length?'':' disabled')+'>Undo</button>'+
    '<button class="btn" data-act="checks"><span class="badge '+(e?'err':w?'warn':'ok')+'">'+(e?e+' errors':w?w+' warnings':'All OK')+(e&&w?', '+w+' warnings':'')+'</span></button>'+
@@ -331,6 +337,8 @@ function renderTree(){
 function renderCenter(){
   const c=$('#center');
   if(ui.tab==='artist'){c.innerHTML='<div class="wrap">'+artistHTML()+'</div>';return}
+  if(ui.tab==='speakers'){c.innerHTML='<div class="wrap">'+speakersHTML()+'</div>';return}
+  if(ui.tab==='history'){c.innerHTML='<div class="wrap">'+historyHTML()+'</div>';return}
   if(ui.tab==='dev'){c.innerHTML='<div class="wrap">'+devHTML()+'</div>';return}
   const s=ui.sel;let h='';
   if(s.t==='level')h=levelHTML(findLevel(s.id));
@@ -390,7 +398,7 @@ function stepHTML(f,st,i){
    '<select class="mini" data-act="ins" '+A(c)+'><option value="">+ Insert below</option>'+TYPES.map(t=>'<option value="'+t+'">'+TL[t]+'</option>').join('')+'</select>'+
    ib('stUp','Up',c)+ib('stDown','Down',c)+ib('stDup','Duplicate',c)+ib('stDel','Delete',c,true)+'</div>';
   if(st.type==='say'||st.type==='ask'){
-    h+='<div class="row-sp">'+field('Speaker',inp({...c,f:'speaker'},st.speaker,'list="dl-speakers"'))+bi(c,st,'text',st.type==='ask'?'Question':'Dialogue',2)+'</div>';
+    h+='<div class="row-sp">'+field('Speaker',sel({...c,f:'speaker'},[['','(none)'],...(S.speakers.includes(st.speaker)||!st.speaker?S.speakers:[...S.speakers,st.speaker]).map(x=>[x,x])],st.speaker||''))+bi(c,st,'text',st.type==='ask'?'Question':'Dialogue',2)+'</div>';
   }else if(st.type==='minigame'||st.type==='cutscene'){
     h+=field('Description (EN)',area({...c,f:'text'},st.text,2));
   }else if(st.type==='result'){
@@ -422,7 +430,7 @@ function optHTML(f,st,o,j){
 }
 function resultHTML(c,r){
   return '<div class="res">'+bi(c,r,'title','Result title')+field('Bon expression',sel({...c,f:'expression'},EXPR,r.expression))+bi(c,r,'text','Result text',2)+bi(c,r,'tip','Tip')+
-   '<div class="grid2">'+field('Illustration (EN, for artist)',area({...c,f:'illustration'},r.illustration,2))+field('Animation before result (EN)',area({...c,f:'animation'},r.animation,2))+'</div></div>';
+   field('Notes (for dev, art and content)',area({...c,f:'notes'},r.notes||'',2))+'</div>';
 }
 /* bilingual field: VI + EN text, each with its own audio upload */
 function bi(c,o,b,label,rows,fd){
@@ -477,6 +485,16 @@ function mediaIssues(){
     out.push({sev:'warn',quiet:true,msg:'Missing: '+parts.join(', '),ev:r.it.ev||null,st:null,lvId:r.it.lv,where:r.it.lvName+' / '+(r.it.evName||'Level and quiz')});
   });
   return out;
+}
+/* ---------- speakers ---------- */
+function speakerUse(){const u={};allEvents().forEach(({ev})=>ev.steps.forEach(st=>{if(st.speaker)u[st.speaker]=(u[st.speaker]||0)+1}));return u}
+function speakersHTML(){
+  const u=speakerUse();
+  let h='<h2>Speakers</h2><div class="hint" style="margin-bottom:8px">Characters who can speak. In the Write tab you pick them from a drop-down.</div>'+
+   '<div class="bar"><div style="width:260px"><input id="newspk" placeholder="New speaker name"></div>'+btn('addSpeaker','+ Add',{},'btn sm pri')+'</div>';
+  h+='<table><tr><th>Name (rename here, steps update)</th><th>Used in</th><th></th></tr>';
+  S.speakers.forEach((n,i)=>{h+='<tr><td><input data-act="spkRename" data-i="'+i+'" value="'+esc(n)+'"></td><td>'+(u[n]||0)+' steps</td><td>'+btn('delSpeaker','Delete',{i},'btn sm danger')+'</td></tr>'});
+  return h+'</table>';
 }
 /* ---------- artist tasks (created by hand by the PM) ---------- */
 function artistHTML(){
@@ -547,7 +565,7 @@ function stageHTML(p){
   let inner='';
   if(p.res){
     const r=p.res.r;const col=p.res.rating==='good'?'var(--good)':p.res.rating==='fair'?'var(--fair)':'var(--bad)';
-    inner='<div class="pres" style="--c:'+col+'">'+playBtns(r,'text')+'<span class="rb" style="background:'+col+'">'+esc(p.res.rating)+'</span><h3>'+esc(r.title)+'</h3><p>'+esc(r.text)+'</p><div class="tip">'+esc(r.tip)+'</div><div class="pbtns"><button class="pb go" data-act="pres">Continue</button></div><div class="pmeta">Bon: '+esc(r.expression)+' | '+esc(r.animation)+'</div></div>';
+    inner='<div class="pres" style="--c:'+col+'">'+playBtns(r,'text')+'<span class="rb" style="background:'+col+'">'+esc(p.res.rating)+'</span><h3>'+esc(r.title)+'</h3><p>'+esc(r.text)+'</p>'+(r.tip?'<div class="tip">'+esc(r.tip)+'</div>':'')+'<div class="pbtns"><button class="pb go" data-act="pres">Continue</button></div><div class="pmeta">Bon: '+esc(r.expression)+(r.notes?' | '+esc(r.notes):'')+'</div></div>';
   }else if(!st){
     inner='<div class="dlgp"><div class="ptx">Event complete: '+esc(f.ev.name)+'</div><div class="pbtns"><button class="pb go" data-act="pnext">Continue</button></div></div>';
   }else if(st.type==='say'||st.type==='ask'){
@@ -559,7 +577,7 @@ function stageHTML(p){
     inner='<div class="pdesc"><div class="pbox'+(st.type==='cutscene'?' cut':'')+'"><b>'+TL[st.type]+'</b>\n'+esc(st.text)+'</div><div class="pbtns"><button class="pb go" data-act="pnext">'+(st.type==='minigame'?'Finish minigame':'Continue')+'</button></div></div>';
   }else if(st.type==='result'&&st.result){
     const r=st.result;
-    inner='<div class="pres" style="--c:var(--fair)">'+playBtns(r,'text')+'<h3>'+esc(r.title)+'</h3><p>'+esc(r.text)+'</p><div class="tip">'+esc(r.tip)+'</div><div class="pbtns"><button class="pb go" data-act="pnext">Continue</button></div><div class="pmeta">Bon: '+esc(r.expression)+' | '+esc(r.animation)+'</div></div>';
+    inner='<div class="pres" style="--c:var(--fair)">'+playBtns(r,'text')+'<h3>'+esc(r.title)+'</h3><p>'+esc(r.text)+'</p>'+(r.tip?'<div class="tip">'+esc(r.tip)+'</div>':'')+'<div class="pbtns"><button class="pb go" data-act="pnext">Continue</button></div><div class="pmeta">Bon: '+esc(r.expression)+(r.notes?' | '+esc(r.notes):'')+'</div></div>';
   }
   const errs=Object.values(p.errors).reduce((a,b)=>a+b,0);
   return '<div class="stage">'+head+inner+'</div><div class="pmeta">Event '+(p.ei+1)+' of '+p.list.length+' | errors so far: '+errs+'</div>';
@@ -645,11 +663,18 @@ document.addEventListener('input',onField);
 document.addEventListener('change',e=>{
   onField(e);
   const el=e.target;
+  if(el.tagName==='INPUT'&&el.dataset.act==='spkRename'){
+    const i=+el.dataset.i,old=S.speakers[i],nv=el.value.trim();
+    if(!nv||(nv!==old&&S.speakers.includes(nv))){alert('The name must be unique and not empty.');render();return}
+    if(nv!==old)mutate(()=>{S.speakers[i]=nv;allEvents().forEach(({ev})=>ev.steps.forEach(st=>{if(st.speaker===old)st.speaker=nv}))});
+    return;
+  }
   if(el.tagName==='SELECT'&&el.dataset.act){
     const a=el.dataset.act,v=el.value;
     if(a==='ins'&&v){const f=findEvent(el.dataset.ev),i=f.ev.steps.findIndex(s=>s.id===el.dataset.st);mutate(()=>f.ev.steps.splice(i+1,0,mkStep(f.ev,v)));}
     else if(a==='artFilter'){ui.artFilter=v;render()}
     else if(a==='devLevel'){ui.devLevel=v;render()}
+    else if(a==='histDoc'){ui.hist.doc=v;loadHist()}
     else if(a==='pscope'){ui.scope=v}
   }
 });
@@ -742,6 +767,12 @@ document.addEventListener('click',e=>{
     case 'playAudio':{try{const au=new Audio(publicUrl(d.path));au.play()}catch(err){}break}
     case 'signout':signOut();break;
     case 'dlZip':downloadZip();break;
+    case 'addSpeaker':{const v=($('#newspk').value||'').trim();if(v&&!S.speakers.includes(v))mutate(()=>{S.speakers.push(v)});else if(v)alert('That speaker already exists.');break}
+    case 'delSpeaker':{const n=S.speakers[+d.i];if((speakerUse()[n]||0)>0){alert('"'+n+'" is used in '+speakerUse()[n]+' steps. Change those steps first.');break}if(confirm('Delete speaker "'+n+'"?'))mutate(()=>{S.speakers.splice(+d.i,1)});break}
+    case 'histPreview':ui.hist.sel=+d.hid;render();break;
+    case 'histRestore':restoreVersion(+d.hid);break;
+    case 'histDownload':{const r=(ui.hist.rows||[]).find(x=>x.hid===+d.hid);if(r)dl(String(r.id).replace(/[^\w.-]+/g,'_')+'_rev'+r.rev+'.json',JSON.stringify(r.data,null,1),'application/json');break}
+    case 'snapNow':snapNow(false);break;
     case 'storage':case 'cleanStorage':{const m=$('#storage-msg');if(m)m.textContent='Checking...';storageReport(a==='cleanStorage').then(r=>{const n=$('#storage-msg');if(n)n.textContent=r}).catch(err=>{const n=$('#storage-msg');if(n)n.textContent='Failed: '+err.message});break}
     case 'playEvent':ui.scope='event';startPlay();break;
     case 'play':startPlay();break;
@@ -1164,6 +1195,71 @@ async function downloadZip(){
   if(fail.length)files.push({name:'MISSING_FILES.txt',data:enc.encode(fail.join('\n'))});
   dl('bon_day_flow_'+new Date().toISOString().slice(0,10)+'.zip',makeZip(files),'application/zip');
   say('Done: '+(list.length-fail.length)+' audio files'+(fail.length?', '+fail.length+' could not be downloaded (see MISSING_FILES.txt)':'')+'.');
+}
+
+/* ---------- version history (restore from the server snapshots) ---------- */
+function sumDoc(id,d){
+  if(!d)return '';
+  if(id==='tasks'){const it=d.items||[];return it.length+' tasks ('+it.filter(x=>x.done).length+' done)'}
+  if(id==='meta')return (d.speakers||[]).length+' speakers, '+(d.levelIds||[]).length+' levels';
+  let sc=0,ev=0,st=0;(d.scenes||[]).forEach(s=>{sc++;(s.events||[]).forEach(e=>{ev++;st+=(e.steps||[]).length})});
+  return sc+' scenes, '+ev+' events, '+st+' steps, '+(d.quiz||[]).length+' quiz questions';
+}
+function detailDoc(id,d){
+  if(id==='tasks')return '<ul>'+(d.items||[]).map(x=>'<li>'+(x.done?'[done] ':'')+esc(x.title||'(no title)')+'</li>').join('')+'</ul>';
+  if(id==='meta')return '<div>Speakers: '+esc((d.speakers||[]).join(', '))+'</div><div>Level order: '+esc((d.levelIds||[]).join(', '))+'</div>';
+  return '<ul>'+(d.scenes||[]).map(s=>'<li><b>'+esc(s.name||s.id)+'</b><ul>'+(s.events||[]).map(e=>'<li>'+esc(e.name||e.id)+' ('+(e.steps||[]).length+' steps)</li>').join('')+'</ul></li>').join('')+'</ul>';
+}
+const fmtTime=t=>{try{return new Date(t).toLocaleString('vi-VN')}catch(e){return String(t)}};
+async function loadHist(){
+  const h=ui.hist;h.rows=null;h.sel=null;
+  if(!h.doc||!SB.ready){render();return}
+  h.loading=true;h.msg='';render();
+  const{data,error}=await SB.client.from('flow_docs_history').select('hid,id,rev,updated_at,updated_by,archived_at,data').eq('id',h.doc).order('archived_at',{ascending:false}).limit(30);
+  h.loading=false;
+  if(error){h.msg='Could not load history: '+error.message+' (run supabase_history.sql first)';h.rows=[]}else h.rows=data||[];
+  render();
+}
+async function snapNow(silent){
+  if(!SB.ready)return false;
+  const w=localDocs(),now=new Date().toISOString();
+  const rows=Object.keys(w).map(id=>({id,data:w[id],rev:SB.docs[id]?SB.docs[id].rev:0,updated_at:now,updated_by:SB.email+' (manual)'}));
+  const{error}=await SB.client.from('flow_docs_history').insert(rows);
+  if(error){if(!silent){ui.hist.msg='Could not save a snapshot: '+error.message+'. Run supabase_history_v2.sql once.';render()}return false}
+  if(!silent){ui.hist.msg='Snapshot of everything saved.';if(ui.hist.doc)loadHist();else render()}
+  return true;
+}
+async function restoreVersion(hid){
+  const r=(ui.hist.rows||[]).find(x=>x.hid===hid);if(!r)return;
+  if(!confirm('Restore this version ('+fmtTime(r.updated_at)+')?\nThe current content of this part is replaced for everyone. A snapshot of the current state is saved first.'))return;
+  await snapNow(true);
+  snapshot();
+  const id=r.id,d=clone(r.data);
+  if(id==='tasks')S.tasks=d.items||[];
+  else if(id==='meta'){
+    if(Array.isArray(d.speakers))S.speakers=d.speakers;
+    if(Array.isArray(d.levelIds)){const m=new Map(S.levels.map(l=>[l.id,l]));S.levels=[...d.levelIds.filter(x=>m.has(x)).map(x=>m.get(x)),...S.levels.filter(l=>!d.levelIds.includes(l.id))]}
+  }else if(id.startsWith('level:')){
+    const lid=id.slice(6),lv=normalize({speakers:[],levels:[d]}).levels[0],i=S.levels.findIndex(l=>l.id===lid);
+    if(i>=0)S.levels[i]=lv;else S.levels.push(lv);
+  }
+  changed();ui.play=null;ensureSel();ui.hist.msg='Restored the version from '+fmtTime(r.updated_at)+'.';render();
+}
+function historyHTML(){
+  const h=ui.hist;
+  const docs=[['tasks','Artist tasks'],['meta','Speakers and level order'],...S.levels.map(l=>['level:'+l.id,'Level: '+(l.titleEn||l.id)])];
+  let o='<h2>History</h2><div class="hint" style="margin-bottom:8px">The server keeps a snapshot of each part about every 10 minutes, for 14 days. Pick a part, look at a version, then restore it. A restore applies to everyone.</div>'+
+    '<div class="bar"><div style="width:300px">'+sel({act:'histDoc'},[['','Choose a part...'],...docs],h.doc)+'</div>'+btn('snapNow','Save a snapshot now')+'</div>'+(h.msg?'<div class="hint" style="margin-bottom:8px">'+esc(h.msg)+'</div>':'');
+  if(!SB.ready)return o+'<div class="empty">Sign in to see the history.</div>';
+  if(!h.doc)return o;
+  if(h.loading||!h.rows)return o+'<div class="empty">Loading...</div>';
+  o+='<table><tr><th>Version from</th><th>Edited by</th><th>Contents</th><th></th></tr><tr><td><b>Now</b></td><td></td><td>'+esc(sumDoc(h.doc,localDocs()[h.doc]))+'</td><td></td></tr>';
+  h.rows.forEach(r=>{o+='<tr'+(h.sel===r.hid?' style="background:#eef3ff"':'')+'><td>'+esc(fmtTime(r.updated_at))+'</td><td>'+esc(r.updated_by||'')+'</td><td>'+esc(sumDoc(r.id,r.data))+'</td><td style="white-space:nowrap">'+btn('histPreview','View',{hid:r.hid})+' '+btn('histRestore','Restore',{hid:r.hid},'btn sm pri')+'</td></tr>'});
+  o+='</table>';
+  if(!h.rows.length)o+='<div class="empty">No versions saved yet for this part.</div>';
+  const s=h.rows.find(r=>r.hid===h.sel);
+  if(s)o+='<div class="card" style="margin-top:12px"><div class="bar"><b>Version from '+esc(fmtTime(s.updated_at))+'</b><span class="sp"></span>'+btn('histDownload','Download JSON',{hid:s.hid})+'</div>'+detailDoc(s.id,s.data)+'</div>';
+  return o;
 }
 
 load();ensureSel();render();
