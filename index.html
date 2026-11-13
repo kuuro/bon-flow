@@ -155,7 +155,7 @@ const RATINGS=['good','fair','bad'],TRIG=['on_enter','on_approach','on_condition
 const EXPR=['happy','shy','sad','scared','neutral'],TYPES=['say','ask','minigame','cutscene','result'];
 const TL={say:'Say',ask:'Ask',minigame:'Minigame',cutscene:'Cutscene',result:'Result'};
 let S,ISSUES=[],undoStack=[],lastJSON='',saveTimer=null,snapTaken=false;
-const ui={tab:'write',sel:{t:'event',id:null},scope:'event',play:null,artFilter:'all',hist:{doc:'',rows:null,sel:null,loading:false,msg:''},devLevel:'',checksOpen:false,saved:true,openRes:new Set()};
+const ui={shut:new Set(),tab:'write',sel:{t:'event',id:null},scope:'event',play:null,artFilter:'all',hist:{doc:'',rows:null,sel:null,loading:false,msg:''},devLevel:'',checksOpen:false,saved:true,openRes:new Set()};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clone=o=>JSON.parse(JSON.stringify(o));
@@ -188,6 +188,8 @@ function fixRes(r){
 function normalize(d){
   d.speakers=d.speakers||SPEAKERS_DEFAULT.slice();
   d.levels=d.levels||[];d.tasks=d.tasks||[];
+  if(!Array.isArray(d.chapters)||!d.chapters.length)d.chapters=[{id:'CH_1',titleVi:'Một ngày',titleEn:'A Day'}];
+  d.levels.forEach(l=>{if(!d.chapters.some(c=>c.id===l.chapter))l.chapter=d.chapters[0].id});
   d.levels.forEach(l=>{l.scenes=l.scenes||[];l.quiz=l.quiz||[];
     l.scenes.forEach(s=>{s.gameobjects=s.gameobjects||[];s.events=s.events||[];
       s.events.forEach(e=>{e.steps=e.steps||[];e.steps.forEach(st=>{st.options=st.options||[];fixRes(st.result);st.options.forEach(o=>fixRes(o.result))})})})});
@@ -198,22 +200,35 @@ function save(){
   saveTimer=setTimeout(()=>{ui.saved=writeCache();
     const el=$('#saved');if(el)el.textContent=statusText();onLocalChange()},250);
 }
-function snapshot(){undoStack.push(lastJSON);if(undoStack.length>80)undoStack.shift()}
+const undoKind=()=>ui.tab==='artist'?'t':'w';
+function snapshot(){
+  const k=undoKind();
+  undoStack.push({k,j:k==='t'?JSON.stringify(S.tasks||[]):JSON.stringify({...S,tasks:[]})});
+  if(undoStack.length>120)undoStack.shift();
+}
+const canUndo=()=>undoStack.some(x=>x.k===undoKind());
 function changed(){lastJSON=JSON.stringify(S);save()}
 function mutate(fn){snapshot();fn();changed();render()}
 function undo(){
-  if(!undoStack.length)return;
-  const j=undoStack.pop(),keepTasks=S.tasks;S=JSON.parse(j);S.tasks=keepTasks;lastJSON=JSON.stringify(S);save();ui.play=null;ensureSel();render();
+  const k=undoKind();let i=-1;
+  for(let x=undoStack.length-1;x>=0;x--)if(undoStack[x].k===k){i=x;break}
+  if(i<0)return;
+  const e=undoStack.splice(i,1)[0],keepTasks=S.tasks;
+  if(k==='t'){S.tasks=JSON.parse(e.j)}else{S=JSON.parse(e.j);S.tasks=keepTasks}
+  snapTaken=false;lastJSON=JSON.stringify(S);save();ui.play=null;ensureSel();render();
 }
 
 /* ---------- lookups ---------- */
 function allEvents(){const o=[];S.levels.forEach(lv=>lv.scenes.forEach(sc=>sc.events.forEach(ev=>o.push({lv,sc,ev}))));return o}
 const findLevel=id=>S.levels.find(l=>l.id===id);
+const chLevels=cid=>S.levels.filter(l=>l.chapter===cid);
+const sortedLevels=()=>S.chapters.flatMap(c=>chLevels(c.id));
+const chName=c=>c.titleEn||c.titleVi||c.id;
 function findScene(id){for(const lv of S.levels){const sc=lv.scenes.find(x=>x.id===id);if(sc)return{lv,sc}}return null}
 function findEvent(id){for(const lv of S.levels)for(const sc of lv.scenes){const ev=sc.events.find(x=>x.id===id);if(ev)return{lv,sc,ev}}return null}
 function ensureSel(){
   const s=ui.sel;
-  const ok=s.t==='level'?findLevel(s.id):s.t==='scene'?findScene(s.id):findEvent(s.id);
+  const ok=s.t==='chapter'?S.chapters.find(c=>c.id===s.id):s.t==='level'?findLevel(s.id):s.t==='scene'?findScene(s.id):findEvent(s.id);
   if(ok)return;
   const first=allEvents()[0];
   if(first)ui.sel={t:'event',id:first.ev.id};
@@ -309,7 +324,7 @@ function renderTop(){
   $('#top').innerHTML='<h1>Bon Day - Flow Writer</h1><div class="tabs">'+
    ['write:Write','speakers:Speakers','artist:Artist','history:History','dev:Dev'].map(t=>{const[k,l]=t.split(':');return '<button class="tab'+(ui.tab===k?' on':'')+'" data-act="tab" data-v="'+k+'">'+l+'</button>'}).join('')+'</div><span class="sp"></span>'+
    peersTopHTML()+(()=>{const m=mediaStats();return '<span class="hint" title="Text fields with VI text: how many have EN text, VI audio, EN audio">EN '+m.en+'/'+m.tot+' | Audio VI '+m.av+' EN '+m.ae+'</span>'})()+'<span id="saved" class="'+(SB.status==='error'?'bad':'')+'">'+statusText()+'</span>'+
-   '<button class="btn" data-act="undo"'+(undoStack.length?'':' disabled')+'>Undo</button>'+
+   '<button class="btn" data-act="undo"'+(canUndo()?'':' disabled')+'>Undo</button>'+
    '<button class="btn" data-act="checks"><span class="badge '+(e?'err':w?'warn':'ok')+'">'+(e?e+' errors':w?w+' warnings':'All OK')+(e&&w?', '+w+' warnings':'')+'</span></button>'+
    '<button class="btn" data-act="import">Import JSON</button><button class="btn pri" data-act="export">Export JSON</button>'+(SB.ready?'<button class="btn" data-act="signout" title="'+esc(SB.email)+'">Sign out ('+esc(myName())+')</button>':'<button class="btn danger" data-act="reset">Reset sample</button>');
 }
@@ -321,17 +336,23 @@ function renderChecks(){
 }
 function renderTree(){
   const s=ui.sel;let h='';
-  S.levels.forEach(l=>{
-    h+='<div class="trow lv'+(s.t==='level'&&s.id===l.id?' on':'')+'" data-act="sel" data-t="level" data-id="'+esc(l.id)+'">'+esc(l.titleEn||l.id)+'<span class="tid">'+esc(l.id)+'</span></div>';
+  S.chapters.forEach(c=>{
+    const open=!ui.shut.has(c.id);
+    h+='<div class="trow lv'+(s.t==='chapter'&&s.id===c.id?' on':'')+'" style="font-weight:700;background:#f1f3f8" data-act="sel" data-t="chapter" data-id="'+esc(c.id)+'"><span data-act="togCh" data-id="'+esc(c.id)+'" style="cursor:pointer;padding-right:6px">'+(open?'▾':'▸')+'</span>'+esc(chName(c))+'<span class="tid">'+esc(c.id)+'</span></div>';
+    if(!open)return;
+    chLevels(c.id).forEach(l=>{
+    h+='<div class="trow lv'+(s.t==='level'&&s.id===l.id?' on':'')+'" style="padding-left:20px" data-act="sel" data-t="level" data-id="'+esc(l.id)+'">'+esc(l.titleEn||l.id)+'<span class="tid">'+esc(l.id)+'</span></div>';
     l.scenes.forEach(sc=>{
-      h+='<div class="trow sc'+(s.t==='scene'&&s.id===sc.id?' on':'')+'" data-act="sel" data-t="scene" data-id="'+esc(sc.id)+'">'+esc(sc.name||sc.id)+'</div>';
+      h+='<div class="trow sc'+(s.t==='scene'&&s.id===sc.id?' on':'')+'" style="padding-left:34px" data-act="sel" data-t="scene" data-id="'+esc(sc.id)+'">'+esc(sc.name||sc.id)+'</div>';
       sc.events.forEach(ev=>{
         const bad=ISSUES.some(x=>x.ev===ev.id&&x.sev==='error');
-        h+='<div class="trow ev'+(s.t==='event'&&s.id===ev.id?' on':'')+'" data-act="sel" data-t="event" data-id="'+esc(ev.id)+'"><span class="dot '+(bad?'bad':'good')+'"></span>'+esc(ev.name||ev.id)+'<span class="tg">'+esc(ev.trigger)+'</span>'+peersAt(ev.id).map(peerChip).join('')+'</div>';
+        h+='<div class="trow ev'+(s.t==='event'&&s.id===ev.id?' on':'')+'" style="padding-left:48px" data-act="sel" data-t="event" data-id="'+esc(ev.id)+'"><span class="dot '+(bad?'bad':'good')+'"></span>'+esc(ev.name||ev.id)+'<span class="tg">'+esc(ev.trigger)+'</span>'+peersAt(ev.id).map(peerChip).join('')+'</div>';
       });
     });
+    });
+    h+='<div style="padding:2px 8px 6px 20px">'+btn('addLevel','+ Level',{ch:c.id})+'</div>';
   });
-  h+='<div class="bar" style="padding:8px">'+btn('addLevel','+ Level')+'</div>';
+  h+='<div class="bar" style="padding:8px">'+btn('addChapter','+ Chapter')+'</div>';
   $('#tree').innerHTML=h;
 }
 function renderCenter(){
@@ -341,7 +362,8 @@ function renderCenter(){
   if(ui.tab==='history'){c.innerHTML='<div class="wrap">'+historyHTML()+'</div>';return}
   if(ui.tab==='dev'){c.innerHTML='<div class="wrap">'+devHTML()+'</div>';return}
   const s=ui.sel;let h='';
-  if(s.t==='level')h=levelHTML(findLevel(s.id));
+  if(s.t==='chapter')h=chapterHTML(S.chapters.find(c=>c.id===s.id));
+  else if(s.t==='level')h=levelHTML(findLevel(s.id));
   else if(s.t==='scene')h=sceneHTML(findScene(s.id));
   else if(s.t==='event')h=eventHTML(findEvent(s.id));
   else h='<div class="empty">Nothing here yet. Add a level on the left.</div>';
@@ -349,10 +371,16 @@ function renderCenter(){
 }
 
 /* ---------- forms ---------- */
+function chapterHTML(c){
+  const n=chLevels(c.id).length,i=S.chapters.findIndex(x=>x.id===c.id);
+  return '<h2>Chapter</h2><div class="card"><div class="grid2">'+field('Title [VI]',inp({ch:c.id,f:'titleVi'},c.titleVi||''))+field('Title [EN]',inp({ch:c.id,f:'titleEn'},c.titleEn||''))+'</div>'+
+   '<div class="hint" style="margin:6px 0">'+n+' level(s) in this chapter. To move a level to another chapter, open the level and change its Chapter.</div>'+
+   '<div class="bar">'+btn('addLevel','+ Level',{ch:c.id})+btn('mvChapter','Move up',{ch:c.id,d:-1})+btn('mvChapter','Move down',{ch:c.id,d:1})+btn('delChapter','Delete chapter',{ch:c.id},'btn sm danger')+'</div></div>';
+}
 function levelHTML(l){
   const c={lv:l.id};
   let h='<h2>Level</h2><div class="card">'+bi(c,l,'title','Title (shown on map)',0,{vi:'titleVi',en:'titleEn'})+
-   '<div class="grid2">'+field('ID',inp({...c,f:'id'},l.id,'class="mono"'))+field('Description (dev notes, EN)',inp({...c,f:'description'},l.description))+'</div>'+
+   '<div class="grid3">'+field('ID',inp({...c,f:'id'},l.id,'class="mono"'))+field('Chapter',sel({...c,f:'chapter'},S.chapters.map(x=>[x.id,chName(x)]),l.chapter))+field('Description (dev notes, EN)',inp({...c,f:'description'},l.description))+'</div>'+
    bi(c,l,'lesson','Lesson ("Ghi nhớ" box at level end, one point per line)',4)+
    '<div class="bar">'+btn('addScene','+ Scene',c)+btn('mvLevel','Move up',{...c,d:-1})+btn('mvLevel','Move down',{...c,d:1})+btn('delLevel','Delete level',c,'btn sm danger')+'</div></div>';
   h+='<h2>Review quiz</h2>';
@@ -512,13 +540,13 @@ function artistHTML(){
   return h;
 }
 function exportData(){
-  return{schema:'bon-day-flow/1',exportedAt:new Date().toISOString(),assetBaseUrl:CFG.url?publicUrl(''):'',speakers:S.speakers,tasks:S.tasks,
-    levels:S.levels.map((l,i)=>({...l,order:i+1,scenes:l.scenes.map((s,j)=>{const{hudTime,bonStart,...sr}=s;return{...sr,order:j+1,events:s.events.map(e=>{const{hudTime:h,...er}=e;return er})}})}))};
+  return{schema:'bon-day-flow/1',exportedAt:new Date().toISOString(),assetBaseUrl:CFG.url?publicUrl(''):'',speakers:S.speakers,tasks:S.tasks,chapters:S.chapters.map((c,i)=>({...c,order:i+1})),
+    levels:sortedLevels().map((l,i)=>({...l,order:i+1,scenes:l.scenes.map((s,j)=>{const{hudTime,bonStart,...sr}=s;return{...sr,order:j+1,events:s.events.map(e=>{const{hudTime:h,...er}=e;return er})}})}))};
 }
 function scriptText(levels){
   let t='';
   levels.forEach(l=>{
-    t+='LEVEL '+l.id+'  ('+l.titleVi+' / '+l.titleEn+')\n';
+    t+='LEVEL '+l.id+'  [chapter '+(l.chapter||'')+']  ('+l.titleVi+' / '+l.titleEn+')\n';
     l.scenes.forEach(sc=>{
       t+='  SCENE '+sc.id+'  "'+sc.name+'"  bg: '+sc.background+'\n    objects: '+sc.gameobjects.join('; ')+'\n';
       sc.events.forEach(ev=>{
@@ -536,7 +564,7 @@ function scriptText(levels){
 function devHTML(){
   const lv=ui.devLevel?S.levels.filter(l=>l.id===ui.devLevel):S.levels;
   const data=exportData();const subset={...data,levels:data.levels.filter(l=>!ui.devLevel||l.id===ui.devLevel)};
-  return '<h2>Dev view</h2><div class="bar"><div style="width:220px">'+sel({act:'devLevel'},[['','All levels'],...S.levels.map(l=>[l.id,l.titleEn||l.id])],ui.devLevel)+'</div><span class="sp"></span>'+
+  return '<h2>Dev view</h2><div class="bar"><div style="width:220px">'+sel({act:'devLevel'},[['','All levels'],...sortedLevels().map(l=>[l.id,(((S.chapters.find(c=>c.id===l.chapter))||{}).titleEn||'')+' / '+(l.titleEn||l.id)])],ui.devLevel)+'</div><span class="sp"></span>'+
    btn('dlZip','Download all (JSON + files, .zip)',{},'btn sm pri')+btn('dlJson','JSON only')+btn('dlTxt','Script (.txt)')+btn('copyJson','Copy JSON')+'</div><div class="hint" id="zip-msg" style="margin-bottom:6px">The zip has bon_day_flow.json, the script, and audio/vi/ and audio/en/ folders. Files are named OWNERID_field_lang.ext. Each audio entry (aud) in the JSON has a "file" path inside the zip.</div>'+
    '<div class="card"><b>Rules</b><div class="hint">Flow: scene is complete when all its events are done. on_approach events have no fixed order and fire once. Option "next": DONE ends the event, RETRY asks again (chosen button dimmed), RESTART_EVENT replays from step 1, GOTO:&lt;step id&gt; jumps to that step. Error = errorOverride if set, else 1 when rating is bad. Stars per scene: 0 errors = 3, 1-2 = 2, 3+ = 1. Level stars = average of scene stars, rounded down. Step and option IDs never change once created.<br>condition_param formats: event_done = event id; count_reached = variable>=N; time_elapsed = seconds; option_chosen = option id.</div></div>'+
    '<h2>Audio files</h2>'+assetTableHTML()+'<div class="bar">'+(SB.ready?btn('storage','Check storage')+btn('cleanStorage','Delete unused files'):'')+'<span class="hint" id="storage-msg"></span></div>'+
@@ -611,6 +639,7 @@ function applyNext(nx){
 function target(d){
   let o=null;
   if(d.task!==undefined)return S.tasks.find(x=>x.id===d.task);
+  if(d.ch!==undefined&&d.lv===undefined)return S.chapters.find(x=>x.id===d.ch);
   if(d.qi!==undefined){const l=findLevel(d.lv);return l&&l.quiz[+d.qi]}
   if(d.op!==undefined){const f=findEvent(d.ev),st=f&&f.ev.steps.find(s=>s.id===d.st);o=st&&st.options.find(x=>x.id===d.op)}
   else if(d.st!==undefined){const f=findEvent(d.ev);o=f&&f.ev.steps.find(s=>s.id===d.st)}
@@ -654,6 +683,7 @@ function onField(e){
   changed();
   if(el.tagName==='TEXTAREA')autosize(el);
   if(el.dataset.rr){render();return}
+  if(f==='chapter'&&e.type==='change'){render();return}
   if(f==='name'||f==='titleEn'||f==='titleVi'){renderTree();}
   if((f==='done')&&ui.tab==='artist'){render();return}
   clearTimeout(onField.t);onField.t=setTimeout(()=>{ISSUES=runChecks();renderTop();renderTree();renderChecks();
@@ -737,13 +767,17 @@ document.addEventListener('click',e=>{
     case 'copyJson':{const t=JSON.stringify(exportData(),null,1);if(navigator.clipboard)navigator.clipboard.writeText(t).catch(()=>{});break}
     case 'import':$('#file').click();break;
     case 'reset':if(confirm('Replace everything with the sample project? Export first if you want to keep your work.')){snapshot();S=normalize(clone(DEFAULT));changed();ui.play=null;ensureSel();render()}break;
-    case 'addLevel':mutate(()=>{const id=uid('L_LEVEL',allIds('level'));S.levels.push({id,titleVi:'',titleEn:'New level',order:S.levels.length+1,description:'',lesson:'',scenes:[],quiz:[]});ui.sel={t:'level',id}});break;
+    case 'togCh':if(ui.shut.has(d.id))ui.shut.delete(d.id);else ui.shut.add(d.id);renderTree();break;
+    case 'addChapter':mutate(()=>{let n=S.chapters.length+1;while(S.chapters.some(c=>c.id==='CH_'+n))n++;const id='CH_'+n;S.chapters.push({id,titleVi:'',titleEn:'New chapter'});ui.sel={t:'chapter',id}});break;
+    case 'delChapter':{if(chLevels(d.ch).length){alert('This chapter still has levels. Move or delete them first.');break}if(S.chapters.length<2){alert('Keep at least one chapter.');break}if(confirm('Delete this chapter?'))mutate(()=>{S.chapters=S.chapters.filter(c=>c.id!==d.ch);ui.sel={t:'none',id:null}});break}
+    case 'mvChapter':mutate(()=>mv(S.chapters,S.chapters.findIndex(c=>c.id===d.ch),+d.d));break;
+    case 'addLevel':mutate(()=>{const id=uid('L_LEVEL',allIds('level'));S.levels.push({id,chapter:d.ch||(S.chapters[0]||{}).id,titleVi:'',titleEn:'New level',order:S.levels.length+1,description:'',lesson:'',scenes:[],quiz:[]});ui.sel={t:'level',id}});break;
     case 'addScene':mutate(()=>{const l=findLevel(d.lv);const id=uid(l.id.replace(/^L_/,'')+'_S',allIds('scene'));l.scenes.push({id,levelId:l.id,name:'New scene',background:'',gameobjects:[],notes:'',events:[]});ui.sel={t:'scene',id}});break;
     case 'addEvent':mutate(()=>{const f=findScene(d.sc);const id=uid(f.sc.id+'_E',allIds('event'));f.sc.events.push({id,name:'New event',trigger:'on_enter',gameobject:'',condType:'',condParam:'',notes:'',steps:[]});ui.sel={t:'event',id}});break;
     case 'delLevel':if(confirm('Delete this level and everything in it?'))mutate(()=>{S.levels=S.levels.filter(l=>l.id!==d.lv)});break;
     case 'delScene':if(confirm('Delete this scene and its events?'))mutate(()=>{const f=findScene(d.sc);f.lv.scenes=f.lv.scenes.filter(s=>s.id!==d.sc)});break;
     case 'delEvent':if(confirm('Delete this event?'))mutate(()=>{const f=findEvent(d.ev);f.sc.events=f.sc.events.filter(x=>x.id!==d.ev)});break;
-    case 'mvLevel':mutate(()=>mv(S.levels,S.levels.findIndex(l=>l.id===d.lv),+d.d));break;
+    case 'mvLevel':mutate(()=>{const l=findLevel(d.lv),sib=chLevels(l.chapter),k=sib.indexOf(l),o=sib[k+ +d.d];if(!o)return;const a=S.levels.indexOf(l),b=S.levels.indexOf(o);S.levels[a]=o;S.levels[b]=l});break;
     case 'mvScene':mutate(()=>{const f=findScene(d.sc);mv(f.lv.scenes,f.lv.scenes.findIndex(s=>s.id===d.sc),+d.d)});break;
     case 'mvEvent':mutate(()=>{const f=findEvent(d.ev);mv(f.sc.events,f.sc.events.findIndex(x=>x.id===d.ev),+d.d)});break;
     case 'addQuiz':mutate(()=>{findLevel(d.lv).quiz.push({id:'Q_'+Date.now().toString(36),question:'',correct:'',wrong1:'',wrong2:'',explanation:''})});break;
@@ -864,7 +898,7 @@ function mergeById(base,local,remote){
 const APP_VER=4;
 const SB={delLevels:new Set(),prevLevels:new Set(),client:null,user:null,email:'',ready:false,docs:{},status:'idle',pushing:false,again:false,timer:null,retry:null,ch:null,peers:{},lastTrack:''};
 function localDocs(){
-  const o={meta:{speakers:S.speakers,levelIds:S.levels.map(l=>l.id),ver:APP_VER},tasks:{items:S.tasks||[]}};
+  const o={meta:{speakers:S.speakers,chapters:S.chapters,levelIds:S.levels.map(l=>l.id),ver:APP_VER},tasks:{items:S.tasks||[]}};
   S.levels.forEach(l=>{const{order,...rest}=l;o['level:'+l.id]=rest});
   return o;
 }
@@ -873,7 +907,7 @@ function stateFromDocs(m){
   Object.keys(m).forEach(id=>{if(id.startsWith('level:'))lv[id.slice(6)]=m[id]});
   const ids=(meta.levelIds||[]).filter(id=>lv[id]);
   Object.keys(lv).forEach(id=>{if(!ids.includes(id))ids.push(id)});
-  return normalize({speakers:meta.speakers||SPEAKERS_DEFAULT.slice(),tasks:(m.tasks&&m.tasks.items)||[],levels:ids.map(id=>lv[id])});
+  return normalize({speakers:meta.speakers||SPEAKERS_DEFAULT.slice(),chapters:meta.chapters,tasks:(m.tasks&&m.tasks.items)||[],levels:ids.map(id=>lv[id])});
 }
 const rowBase=r=>({rev:r.rev,data:r.data,json:canon(r.data)});
 function saveBase(){writeCache()}
@@ -1201,7 +1235,7 @@ async function downloadZip(){
 function sumDoc(id,d){
   if(!d)return '';
   if(id==='tasks'){const it=d.items||[];return it.length+' tasks ('+it.filter(x=>x.done).length+' done)'}
-  if(id==='meta')return (d.speakers||[]).length+' speakers, '+(d.levelIds||[]).length+' levels';
+  if(id==='meta')return (d.speakers||[]).length+' speakers, '+(d.chapters||[]).length+' chapters, '+(d.levelIds||[]).length+' levels';
   let sc=0,ev=0,st=0;(d.scenes||[]).forEach(s=>{sc++;(s.events||[]).forEach(e=>{ev++;st+=(e.steps||[]).length})});
   return sc+' scenes, '+ev+' events, '+st+' steps, '+(d.quiz||[]).length+' quiz questions';
 }
@@ -1238,6 +1272,7 @@ async function restoreVersion(hid){
   if(id==='tasks')S.tasks=d.items||[];
   else if(id==='meta'){
     if(Array.isArray(d.speakers))S.speakers=d.speakers;
+    if(Array.isArray(d.chapters)&&d.chapters.length)S.chapters=d.chapters;
     if(Array.isArray(d.levelIds)){const m=new Map(S.levels.map(l=>[l.id,l]));S.levels=[...d.levelIds.filter(x=>m.has(x)).map(x=>m.get(x)),...S.levels.filter(l=>!d.levelIds.includes(l.id))]}
   }else if(id.startsWith('level:')){
     const lid=id.slice(6),lv=normalize({speakers:[],levels:[d]}).levels[0],i=S.levels.findIndex(l=>l.id===lid);
@@ -1247,7 +1282,7 @@ async function restoreVersion(hid){
 }
 function historyHTML(){
   const h=ui.hist;
-  const docs=[['tasks','Artist tasks'],['meta','Speakers and level order'],...S.levels.map(l=>['level:'+l.id,'Level: '+(l.titleEn||l.id)])];
+  const docs=[['tasks','Artist tasks'],['meta','Speakers, chapters and level order'],...sortedLevels().map(l=>['level:'+l.id,'Level: '+(l.titleEn||l.id)])];
   let o='<h2>History</h2><div class="hint" style="margin-bottom:8px">The server keeps a snapshot of each part about every 10 minutes, for 14 days. Pick a part, look at a version, then restore it. A restore applies to everyone.</div>'+
     '<div class="bar"><div style="width:300px">'+sel({act:'histDoc'},[['','Choose a part...'],...docs],h.doc)+'</div>'+btn('snapNow','Save a snapshot now')+'</div>'+(h.msg?'<div class="hint" style="margin-bottom:8px">'+esc(h.msg)+'</div>':'');
   if(!SB.ready)return o+'<div class="empty">Sign in to see the history.</div>';
