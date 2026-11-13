@@ -129,6 +129,7 @@ pre.script{background:#fff;border:1px solid var(--line);border-radius:10px;paddi
 <div id="checks" hidden></div>
 <datalist id="dl-speakers"></datalist><datalist id="dl-go"></datalist>
 <input type="file" id="file" accept=".json,application/json" hidden>
+<input type="file" id="bulkfile" accept="audio/*,.mp3,.ogg,.m4a,.wav,.aac" multiple hidden>
 <input type="file" id="assetfile" accept="audio/*,.mp3,.ogg,.m4a,.wav,.aac" hidden>
 <div id="login"><form id="login-form" autocomplete="on"><h2>Bon Day - Flow Writer</h2><div class="hint">Team sign-in. Ask the PM if you need an account.</div>
 <label class="fld"><span>Email</span><input id="login-email" type="email" autocomplete="username" required></label>
@@ -155,7 +156,7 @@ const RATINGS=['good','fair','bad'],TRIG=['on_enter','on_approach','on_condition
 const EXPR=['happy','shy','sad','scared','neutral'],TYPES=['say','ask','minigame','cutscene','result'];
 const TL={say:'Say',ask:'Ask',minigame:'Minigame',cutscene:'Cutscene',result:'Result'};
 let S,ISSUES=[],undoStack=[],lastJSON='',saveTimer=null,snapTaken=false;
-const ui={shut:new Set(),tab:'write',sel:{t:'event',id:null},scope:'event',play:null,artFilter:'all',hist:{doc:'',rows:null,sel:null,loading:false,msg:''},devLevel:'',checksOpen:false,saved:true,openRes:new Set()};
+const ui={voice:{scope:'',lang:'vi',group:'speaker',missing:false,ids:false,types:{dlg:1,opt:1,res:1,quiz:1,lvl:0},msg:''},shut:new Set(),tab:'write',sel:{t:'event',id:null},scope:'event',play:null,artFilter:'all',hist:{doc:'',rows:null,sel:null,loading:false,msg:''},devLevel:'',checksOpen:false,saved:true,openRes:new Set()};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clone=o=>JSON.parse(JSON.stringify(o));
@@ -321,7 +322,7 @@ function autosize(t){t.style.height='auto';t.style.height=Math.max(34,t.scrollHe
 function renderTop(){
   const e=ISSUES.filter(x=>x.sev==='error').length,w=ISSUES.filter(x=>x.sev==='warn').length;
   $('#top').innerHTML='<h1>Bon Day - Flow Writer</h1><div class="tabs">'+
-   ['write:Write','speakers:Speakers','artist:Artist','history:History','dev:Dev'].map(t=>{const[k,l]=t.split(':');return '<button class="tab'+(ui.tab===k?' on':'')+'" data-act="tab" data-v="'+k+'">'+l+'</button>'}).join('')+'</div><span class="sp"></span>'+
+   ['write:Write','voice:Voice','speakers:Speakers','artist:Artist','history:History','dev:Dev'].map(t=>{const[k,l]=t.split(':');return '<button class="tab'+(ui.tab===k?' on':'')+'" data-act="tab" data-v="'+k+'">'+l+'</button>'}).join('')+'</div><span class="sp"></span>'+
    peersTopHTML()+(()=>{const m=mediaStats();return '<span class="hint" title="Text fields with VI text: how many have EN text, VI audio, EN audio">EN '+m.en+'/'+m.tot+' | Audio VI '+m.av+' EN '+m.ae+'</span>'})()+'<span id="saved" class="'+(SB.status==='error'?'bad':'')+'">'+statusText()+'</span>'+
    '<button class="btn" data-act="undo"'+(canUndo()?'':' disabled')+'>Undo</button>'+
    '<button class="btn" data-act="checks"><span class="badge '+(e?'err':w?'warn':'ok')+'">'+(e?e+' errors':w?w+' warnings':'All OK')+(e&&w?', '+w+' warnings':'')+'</span></button>'+
@@ -357,6 +358,7 @@ function renderTree(){
 function renderCenter(){
   const c=$('#center');
   if(ui.tab==='artist'){c.innerHTML='<div class="wrap">'+artistHTML()+'</div>';return}
+  if(ui.tab==='voice'){c.innerHTML='<div class="wrap" style="max-width:1100px">'+voiceHTML()+'</div>';return}
   if(ui.tab==='speakers'){c.innerHTML='<div class="wrap">'+speakersHTML()+'</div>';return}
   if(ui.tab==='history'){c.innerHTML='<div class="wrap">'+historyHTML()+'</div>';return}
   if(ui.tab==='dev'){c.innerHTML='<div class="wrap">'+devHTML()+'</div>';return}
@@ -697,6 +699,7 @@ document.addEventListener('change',e=>{
     if(nv!==old)mutate(()=>{S.speakers[i]=nv;allEvents().forEach(({ev})=>ev.steps.forEach(st=>{if(st.speaker===old)st.speaker=nv}))});
     return;
   }
+  if(el.tagName==='INPUT'&&el.type==='checkbox'&&el.dataset.act==='vOpt'){const k=el.dataset.k;if(k==='missing'||k==='ids')ui.voice[k]=el.checked;else ui.voice.types[k]=el.checked?1:0;render();return}
   if(el.tagName==='SELECT'&&el.dataset.act){
     const a=el.dataset.act,v=el.value;
     if(a==='ins'&&v){const f=findEvent(el.dataset.ev),i=f.ev.steps.findIndex(s=>s.id===el.dataset.st);mutate(()=>f.ev.steps.splice(i+1,0,mkStep(f.ev,v)));}
@@ -704,6 +707,9 @@ document.addEventListener('change',e=>{
     else if(a==='devLevel'){ui.devLevel=v;render()}
     else if(a==='histDoc'){ui.hist.doc=v;loadHist()}
     else if(a==='pscope'){ui.scope=v}
+    else if(a==='vScope'){ui.voice.scope=v;render()}
+    else if(a==='vLang'){ui.voice.lang=v;render()}
+    else if(a==='vGroup'){ui.voice.group=v;render()}
   }
 });
 document.addEventListener('focusin',()=>{snapTaken=false});
@@ -792,6 +798,8 @@ document.addEventListener('click',e=>{
     case 'addRes':mutate(()=>{st.options.find(o=>o.id===d.op).result=emptyResult()});break;
     case 'delRes':mutate(()=>{st.options.find(o=>o.id===d.op).result=null});break;
     case 'quick':quickWrite(d.ev);break;
+    case 'vCopy':voiceCopy(+d.g,d.l,el);break;
+    case 'vBulk':$('#bulkfile').click();break;
     case 'upload':pendingUpload={...d};delete pendingUpload.act;$('#assetfile').click();break;
     case 'delAudio':{const o=target(d);if(o&&o.aud&&o.aud[d.k])mutate(()=>{delete o.aud[d.k]});break}
     case 'addTask':mutate(()=>{S.tasks.unshift({id:'T_'+Date.now().toString(36),title:'',desc:'',done:false,link:''});ui.artFilter=ui.artFilter==='done'?'all':ui.artFilter});break;
@@ -819,6 +827,7 @@ document.addEventListener('keydown',e=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'&&!['INPUT','TEXTAREA'].includes(document.activeElement.tagName)){e.preventDefault();undo()}
 });
 let pendingUpload=null;
+$('#bulkfile').addEventListener('change',e=>{const fs=[...e.target.files];e.target.value='';voiceBulk(fs)});
 $('#assetfile').addEventListener('change',e=>{
   const fl=[...e.target.files];e.target.value='';
   if(fl.length&&pendingUpload)uploadAudio(pendingUpload,fl[0]);
@@ -1293,6 +1302,99 @@ function historyHTML(){
   const s=h.rows.find(r=>r.hid===h.sel);
   if(s)o+='<div class="card" style="margin-top:12px"><div class="bar"><b>Version from '+esc(fmtTime(s.updated_at))+'</b><span class="sp"></span>'+btn('histDownload','Download JSON',{hid:s.hid})+'</div>'+detailDoc(s.id,s.data)+'</div>';
   return o;
+}
+
+/* ---------- Voice tab: every line of a scene in one place, for AI voice generation ---------- */
+const VOICE_ORDER=['(no speaker)','Player options','Result screen','Quiz','Level'];
+function voiceRows(scope){
+  const rows=[],P=String(scope||'all').split(':'),kind=P[0],sid=P[1];
+  const add=(type,spk,owner,o,c,b,fd,where)=>{
+    if(!o)return;
+    const vf=(fd&&fd.vi)||b,ef=(fd&&fd.en)||b+'En',a=o.aud||{};
+    rows.push({type,spk,owner,b,c,o,vi:String(o[vf]||''),en:String(o[ef]||''),avi:!!(a[b+'_vi']&&a[b+'_vi'].path),aen:!!(a[b+'_en']&&a[b+'_en'].path),where});
+  };
+  S.chapters.forEach(ch=>chLevels(ch.id).forEach(lv=>{
+    if(kind==='ch'&&ch.id!==sid)return;
+    if(kind==='lv'&&lv.id!==sid)return;
+    if(kind!=='sc'){
+      add('lvl','Level',lv.id,lv,{lv:lv.id},'title',{vi:'titleVi',en:'titleEn'},lv.titleEn||lv.id);
+      add('lvl','Level',lv.id,lv,{lv:lv.id},'lesson',{vi:'lesson',en:'lessonEn'},(lv.titleEn||lv.id)+' lesson');
+    }
+    lv.scenes.forEach(sc=>{
+      if(kind==='sc'&&sc.id!==sid)return;
+      sc.events.forEach(ev=>ev.steps.forEach(st=>{
+        const w=(sc.name||sc.id)+' / '+(ev.name||ev.id)+' / '+st.id,c={ev:ev.id,st:st.id};
+        if(st.type==='say'||st.type==='ask')add('dlg',st.speaker||'(no speaker)',st.id,st,c,'text',null,w);
+        if(st.type==='result'&&st.result)['title','text','tip'].forEach(b=>add('res','Result screen',st.id+'_result',st.result,{...c,res:1},b,null,w+' result'));
+        (st.options||[]).forEach(o=>{
+          add('opt','Player options',o.id,o,{...c,op:o.id},'text',null,w+' / '+o.id);
+          if(o.result)['title','text','tip'].forEach(b=>add('res','Result screen',o.id+'_result',o.result,{...c,op:o.id,res:1},b,null,w+' / '+o.id+' result'));
+        });
+      }));
+    });
+    if(kind!=='sc')(lv.quiz||[]).forEach((q,i)=>QF.forEach(f=>add('quiz','Quiz',q.id,q,{lv:lv.id,qi:i},f.b,null,(lv.titleEn||lv.id)+' quiz '+q.id)));
+  }));
+  return rows;
+}
+const vFlat=x=>String(x||'').replace(/\s*\n\s*/g,' ').trim();
+const vId=(r,l)=>slug(r.owner)+'_'+r.b+'_'+l;
+let VCACHE=[];
+function voiceHTML(){
+  const V=ui.voice;
+  if(!V.scope){const f=S.chapters.flatMap(c=>chLevels(c.id)).flatMap(l=>l.scenes)[0];V.scope=f?'sc:'+f.id:'all'}
+  const opts=[['all','Everything']];
+  S.chapters.forEach(ch=>{opts.push(['ch:'+ch.id,'Chapter: '+chName(ch)]);chLevels(ch.id).forEach(l=>{opts.push(['lv:'+l.id,'   Level: '+(l.titleEn||l.id)]);l.scenes.forEach(sc=>opts.push(['sc:'+sc.id,'      Scene: '+(sc.name||sc.id)]))})});
+  if(!opts.some(o=>o[0]===V.scope))V.scope='all';
+  let rows=voiceRows(V.scope).filter(r=>V.types[r.type]);
+  const langs=V.lang==='both'?['vi','en']:[V.lang];
+  rows=rows.filter(r=>langs.some(l=>vFlat(r[l])));
+  if(V.missing)rows=rows.filter(r=>langs.some(l=>vFlat(r[l])&&!(l==='vi'?r.avi:r.aen)));
+  let groups;
+  if(V.group==='speaker'){
+    const m=new Map();rows.forEach(r=>{if(!m.has(r.spk))m.set(r.spk,[]);m.get(r.spk).push(r)});
+    const order=[...S.speakers,...VOICE_ORDER];
+    groups=[...m.keys()].sort((a,b)=>{const x=order.indexOf(a),y=order.indexOf(b);return (x<0?999:x)-(y<0?999:y)}).map(k=>({name:k,rows:m.get(k)}));
+  }else groups=[{name:'All lines, story order',rows}];
+  VCACHE=[];
+  const chk=(k,label,on)=>'<label style="margin-right:12px;white-space:nowrap"><input type="checkbox" data-act="vOpt" data-k="'+k+'"'+(on?' checked':'')+'> '+label+'</label>';
+  let h='<h2>Voice lines</h2><div class="hint" style="margin-bottom:8px">All lines in the chosen scope, ready to select and copy for AI voice generation. One line per sentence.</div>'+
+   '<div class="bar" style="flex-wrap:wrap"><div style="width:300px">'+sel({act:'vScope'},opts,V.scope)+'</div>'+
+   '<div style="width:150px">'+sel({act:'vLang'},[['vi','Vietnamese'],['en','English'],['both','VI and EN']],V.lang)+'</div>'+
+   '<div style="width:200px">'+sel({act:'vGroup'},[['speaker','Group by speaker'],['order','Story order']],V.group)+'</div></div>'+
+   '<div style="margin:6px 0">'+chk('dlg','Dialogue',V.types.dlg)+chk('opt','Options',V.types.opt)+chk('res','Result screens',V.types.res)+chk('quiz','Quiz',V.types.quiz)+chk('lvl','Level title and lesson',V.types.lvl)+'</div>'+
+   '<div style="margin:6px 0">'+chk('missing','Only lines without audio',V.missing)+chk('ids','Show file name before each line',V.ids)+(SB.ready?btn('vBulk','Upload many audio files'):'')+'</div>'+(V.msg?'<div class="hint" style="margin:6px 0;white-space:pre-wrap">'+esc(V.msg)+'</div>':'');
+  if(!rows.length)return h+'<div class="empty">No lines match.</div>';
+  h+='<div class="hint" style="margin-bottom:6px">'+rows.length+' lines. To attach audio in bulk, name each file exactly like the file name shown when you turn on that option (extension can be mp3, ogg, m4a, wav), then press "Upload many audio files".</div>';
+  groups.forEach(g=>{
+    h+='<div class="card" style="margin-bottom:10px"><div class="bar"><b>'+esc(g.name)+'</b><span class="hint">'+g.rows.length+' lines</span><span class="sp"></span>';
+    const cols=langs.map(l=>{
+      const text=g.rows.filter(r=>vFlat(r[l])).map(r=>(V.ids?'['+vId(r,l)+'] ':'')+vFlat(r[l])).join('\n');
+      const gi=VCACHE.push(text)-1;
+      return {l,text,gi};
+    });
+    cols.forEach(c=>{h+=btn('vCopy','Copy '+c.l.toUpperCase(),{g:c.gi,l:c.l})});
+    h+='</div><div style="display:grid;grid-template-columns:repeat('+cols.length+',1fr);gap:10px">'+
+      cols.map(c=>'<div>'+(cols.length>1?'<div class="hint">'+c.l.toUpperCase()+'</div>':'')+'<div style="white-space:pre-wrap;user-select:text;border:1px solid #dde1ea;border-radius:8px;padding:10px;background:#fff;font-size:14px;line-height:1.7">'+esc(c.text)+'</div></div>').join('')+'</div></div>';
+  });
+  return h;
+}
+async function voiceCopy(i,l,btnEl){
+  const text=VCACHE[i];if(text==null)return;
+  try{await navigator.clipboard.writeText(text)}catch(e){const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();try{document.execCommand('copy')}catch(_){}ta.remove()}
+  if(btnEl){const o=btnEl.textContent;btnEl.textContent='Copied';setTimeout(()=>{btnEl.textContent=o},1200)}
+}
+async function voiceBulk(files){
+  if(!files.length)return;
+  const idx={};
+  voiceRows('all').forEach(r=>['vi','en'].forEach(l=>{idx[vId(r,l).toLowerCase()]={r,l}}));
+  let ok=0;const bad=[];
+  for(const f of files){
+    const base=f.name.replace(/\.[^.]+$/,'').replace(/^\[|\]$/g,'').trim(),hit=idx[slug(base).toLowerCase()];
+    if(!hit){bad.push(f.name);continue}
+    ui.voice.msg='Uploading '+(ok+1)+' of '+files.length+'...';render();
+    await uploadAudio({...hit.r.c,k:hit.r.b+'_'+hit.l},f);ok++;
+  }
+  ui.voice.msg=ok+' file(s) attached.'+(bad.length?'\nNo matching line for: '+bad.join(', '):'');render();
 }
 
 load();ensureSel();render();
