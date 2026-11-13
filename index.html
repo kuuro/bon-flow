@@ -653,7 +653,7 @@ function onField(e){
   const el=e.target;if(!el.dataset||!el.dataset.f)return;
   const isSel=el.tagName==='SELECT'||el.type==='checkbox';
   if(isSel&&e.type!=='change')return;
-  if(!isSel&&e.type==='change'&&el.dataset.f!=='id'&&el.dataset.f!=='speaker')return;
+  if(!isSel&&e.type==='change'&&el.dataset.f!=='id')return;
   const f=el.dataset.f,o=target(el.dataset);if(!o)return;
   const val=el.type==='checkbox'?el.checked:el.value;
   if(f==='id'){
@@ -665,7 +665,6 @@ function onField(e){
     if(ui.sel.id===old)ui.sel.id=v;
     changed();render();return;
   }
-  if(f==='speaker'&&e.type==='change'){if(val&&!S.speakers.includes(val)){S.speakers.push(val);changed();render()}return}
   if(f==='type'){
     const st=o;
     if(st.type==='ask'&&val!=='ask'&&st.options.length&&!confirm('Changing the type removes this step\'s options. Continue?')){render();return}
