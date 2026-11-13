@@ -288,7 +288,6 @@ function runChecks(){
 function resCheck(r,m,st,add){
   if(!r.title.trim()||!r.text.trim())add('error',m+'result needs a title and text',st);
   if(r.text.length>160)add('warn',m+'result text is over 160 characters ('+r.text.length+')',st);
-  if((r.tip||'').length>60)add('warn',m+'tip is over 60 characters ('+r.tip.length+')',st);
 }
 
 /* ---------- html helpers ---------- */
