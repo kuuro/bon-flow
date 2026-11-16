@@ -154,10 +154,11 @@ const KEY='bon_flow_v1';
 const SPEAKERS_DEFAULT=['Bon','Mom','Teacher','Pedestrian','Driver','Stranger'];
 const RATINGS=['good','fair','bad'],TRIG=['on_enter','on_approach','on_condition'],COND=['event_done','count_reached','time_elapsed','option_chosen'];
 const EXPR=['happy','shy','sad','scared','neutral'],TYPES=['say','ask','minigame','cutscene','result','end'];
-const MINIGAMES=['brush_teeth','feed','dress_up','collect_leaves','run_jump'];
+/* minigame id -> default params (edit here to add games or change defaults) */
+const MINIGAMES={brush_teeth:{teeth:10},feed:{winCount:8},dress_up:{},collect_leaves:{target:10},run_jump:{}};
 const TL={say:'Say',ask:'Ask',minigame:'Minigame',cutscene:'Cutscene',result:'Result',end:'End level'};
 let S,ISSUES=[],undoStack=[],lastJSON='',saveTimer=null,snapTaken=false;
-const ui={voice:{scope:'',lang:'vi',group:'speaker',missing:false,ids:false,types:{dlg:1,opt:1,res:1,quiz:1,lvl:0},msg:''},shut:new Set(),tab:'write',sel:{t:'event',id:null},scope:'event',play:null,artFilter:'all',hist:{doc:'',rows:null,sel:null,loading:false,msg:''},devLevel:'',checksOpen:false,saved:true,openRes:new Set()};
+const ui={expScope:'all',voice:{scope:'',lang:'vi',group:'speaker',missing:false,ids:false,types:{dlg:1,opt:1,res:1,quiz:1,lvl:0},msg:''},shut:new Set(),tab:'write',sel:{t:'event',id:null},scope:'event',play:null,artFilter:'all',hist:{doc:'',rows:null,sel:null,loading:false,msg:''},devLevel:'',checksOpen:false,saved:true,openRes:new Set()};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clone=o=>JSON.parse(JSON.stringify(o));
@@ -199,10 +200,11 @@ function normalize(d){
         s.rooms=[{id:rid,name:'Room 1',background:'',gameobjects:Array.isArray(s.gameobjects)?s.gameobjects:[],disableAfterEvent:''}];
         s.startRoom=rid;s.events.forEach(e=>{if(!e.room)e.room=rid});
       }
-      delete s.gameobjects;
+      delete s.gameobjects;delete s.hudTime;
+      if(typeof s.notes==='string')s.notes=s.notes.replace(/HUD time changes per event[^.]*\.\s*/i,'').replace(/Scene ends when all \d+ events are done\./,'Scene ends when the event with an End level step is done.');
       s.rooms.forEach(r=>{r.gameobjects=r.gameobjects||[];r.disableAfterEvent=r.disableAfterEvent||'';r.name=r.name||'';r.background=r.background||''});
       if(s.startRoom===undefined)s.startRoom='';
-      s.events.forEach(e=>{e.room=e.room||'';e.steps=e.steps||[];e.steps.forEach(st=>{st.options=st.options||[];fixRes(st.result);st.options.forEach(o=>fixRes(o.result));
+      s.events.forEach(e=>{delete e.hudTime;e.room=e.room||'';e.steps=e.steps||[];e.steps.forEach(st=>{st.options=st.options||[];fixRes(st.result);st.options.forEach(o=>fixRes(o.result));
         if(st.type==='minigame'){st.minigameId=st.minigameId||'';if(st.params===undefined||st.params===null)st.params={}}})})})});
   return d;
 }
@@ -247,6 +249,12 @@ function ensureSel(){
   else ui.sel={t:'none',id:null};
 }
 function nextNum(prefix,ids){let m=0;ids.forEach(i=>{if(i.startsWith(prefix)){const n=parseInt(i.slice(prefix.length),10);if(!isNaN(n)&&String(n)===i.slice(prefix.length))m=Math.max(m,n)}});return m+1}
+function nextSeqId(sibs,fallback,taken){
+  const re=/^(.*\D)(\d+)$/,ms=sibs.map(x=>re.exec(x)).filter(Boolean);
+  const pre=ms.length?ms[ms.length-1][1]:fallback;let n=0;
+  ms.forEach(m=>{if(m[1]===pre)n=Math.max(n,+m[2])});n++;
+  while(taken.includes(pre+n))n++;return pre+n;
+}
 function uid(prefix,ids){let n=nextNum(prefix,ids);while(ids.includes(prefix+n))n++;return prefix+n}
 const allIds=(kind)=>{
   if(kind==='level')return S.levels.map(l=>l.id);
@@ -256,7 +264,7 @@ const allIds=(kind)=>{
 const emptyResult=()=>({title:'',text:'',tip:'',expression:'happy',notes:'',artDone:false});
 function mkOpt(st,rating,next){return{id:uid(st.id+'_O',st.options.map(o=>o.id)),text:'',rating,next,errorOverride:null,result:null}}
 function mkStep(ev,type){
-  const st={id:uid(ev.id+'_B',ev.steps.map(s=>s.id)),type,speaker:(type==='say'||type==='ask')?'Bon':'',text:'',options:[],result:null,artDone:false};
+  const st={id:nextSeqId(ev.steps.map(s=>s.id),ev.id+'_B',ev.steps.map(s=>s.id)),type,speaker:(type==='say'||type==='ask')?'Bon':'',text:'',options:[],result:null,artDone:false};
   if(type==='ask'){st.options.push(mkOpt(st,'good','DONE'));st.options.push(mkOpt(st,'bad','RETRY'))}
   if(type==='result')st.result=emptyResult();
   if(type==='minigame'){st.minigameId='';st.params={}}
@@ -278,7 +286,14 @@ function runChecks(){
       if(r.disableAfterEvent&&!sc.events.some(e=>e.id===r.disableAfterEvent))sadd('error','Room "'+(r.name||r.id)+'": "disable after event" points to an event that does not exist');
       if(!sc.events.some(e=>e.room===r.id))sadd('warn','Room "'+(r.name||r.id)+'" is not used by any event');
     });
-    if(sc.events.length&&!sc.events.some(e=>e.steps.some(s=>s.type==='end')))sadd('warn','Scene has no event with an "End level" step');
+    const endEv=sc.events.filter(e=>e.steps.some(s=>s.type==='end'));
+    if(sc.events.length&&!endEv.length)sadd('warn','Scene has no event with an "End level" step');
+    if(endEv.length>1)sadd('warn','Scene has '+endEv.length+' events with an "End level" step (expected one)');
+    endEv.forEach(e=>{if(sc.events.indexOf(e)!==sc.events.length-1)out.push({sev:'warn',msg:'Event with an "End level" step is not the last event of the scene',ev:e.id,st:null,where:sw+' / '+(e.name||e.id)})});
+    const seenR={};
+    sc.rooms.forEach(r=>{const nm=r.name||'';
+      if(/\s{2,}/.test(nm))sadd('warn','Room name "'+nm+'" has a double space');
+      const k=nm.trim().toLowerCase();if(k){if(seenR[k])sadd('warn','Two rooms are named "'+nm.trim()+'"');seenR[k]=1}});
   })));
   allEvents().forEach(({lv,sc,ev})=>{
     const add=(sev,msg,st)=>out.push({sev,msg,ev:ev.id,st:st?st.id:null,where:(lv.titleEn||lv.id)+' / '+(ev.name||ev.id)});
@@ -293,6 +308,17 @@ function runChecks(){
       const last=ev.steps[ev.steps.length-1];
       const canEnd=last.type!=='ask'||ev.steps.some(s=>s.type==='end'||(s.options||[]).some(o=>o.next==='DONE'));
       if(!canEnd)add('warn','Event has no way to reach DONE (no DONE option and no ending step)');
+    }
+    if(ev.steps.length){
+      const seen=new Set(),stack=[0],byId={};ev.steps.forEach((s,i)=>byId[s.id]=i);
+      while(stack.length){
+        const i=stack.pop();if(i<0||i>=ev.steps.length||seen.has(i))continue;seen.add(i);
+        const s=ev.steps[i];
+        if(s.type==='end')continue;
+        if(s.type==='ask'){(s.options||[]).forEach(o=>{const nx=String(o.next||'');if(nx.startsWith('GOTO:')&&byId[nx.slice(5)]!==undefined)stack.push(byId[nx.slice(5)])})}
+        else stack.push(i+1);
+      }
+      ev.steps.forEach((s,i)=>{if(!seen.has(i))add('error','Step '+(i+1)+' ('+s.id+') can never be reached',s)});
     }
     ev.steps.forEach((st,i)=>{
       const n='Step '+(i+1)+': ';
@@ -311,6 +337,7 @@ function runChecks(){
         st.options.forEach((o,j)=>{
           const m=n+'option '+(j+1)+': ';
           if(!o.text.trim())add('error',m+'button text is empty',st);
+          if(!String(o.next||'').trim())add('error',m+'next is empty',st);
           if(String(o.next).startsWith('GOTO:')&&!ev.steps.some(x=>x.id===o.next.slice(5)))add('error',m+'GOTO target step is missing',st);
           if(o.result)resCheck(o.result,m,st,add);
         });
@@ -360,7 +387,7 @@ function renderTop(){
    peersTopHTML()+(()=>{const m=mediaStats();return '<span class="hint" title="Text fields with VI text: how many have EN text, VI audio, EN audio">EN '+m.en+'/'+m.tot+' | Audio VI '+m.av+' EN '+m.ae+'</span>'})()+'<span id="saved" class="'+(SB.status==='error'?'bad':'')+'">'+statusText()+'</span>'+
    '<button class="btn" data-act="undo"'+(canUndo()?'':' disabled')+'>Undo</button>'+
    '<button class="btn" data-act="checks"><span class="badge '+(e?'err':w?'warn':'ok')+'">'+(e?e+' errors':w?w+' warnings':'All OK')+(e&&w?', '+w+' warnings':'')+'</span></button>'+
-   '<button class="btn" data-act="import">Import JSON</button><button class="btn pri" data-act="export">Export JSON</button>'+(SB.ready?'<button class="btn" data-act="signout" title="'+esc(SB.email)+'">Sign out ('+esc(myName())+')</button>':'<button class="btn danger" data-act="reset">Reset sample</button>');
+   '<button class="btn" data-act="import">Import JSON</button><select class="mini" data-act="expScope" title="What to export" style="margin-right:4px"><option value="all"'+(ui.expScope==='level'?'':' selected')+'>All levels</option><option value="level"'+(ui.expScope==='level'?' selected':'')+'>This level only</option></select><button class="btn pri" data-act="export">Export JSON</button>'+(SB.ready?'<button class="btn" data-act="signout" title="'+esc(SB.email)+'">Sign out ('+esc(myName())+')</button>':'<button class="btn danger" data-act="reset">Reset sample</button>');
 }
 function renderChecks(){
   const el=$('#checks');el.hidden=!ui.checksOpen;if(!ui.checksOpen)return;
@@ -484,9 +511,10 @@ function stepHTML(f,st,i){
   }else if(st.type==='minigame'||st.type==='cutscene'){
     h+=field('Description (EN)',area({...c,f:'text'},st.text,2));
     if(st.type==='minigame'){
+      h+='<div class="hint" style="margin:-4px 0 6px">Numbers in this description are for humans only. The game reads Parameters below.</div>';
       const bad=typeof st.params==='string';
-      h+='<div class="grid2">'+field('Minigame',sel({...c,f:'minigameId'},[['','Choose...'],...(MINIGAMES.includes(st.minigameId)||!st.minigameId?MINIGAMES:[...MINIGAMES,st.minigameId]).map(m=>[m,m])],st.minigameId||''))+
-       field('Params (JSON object, for example {"teeth":10})',area({...c,f:'params'},bad?st.params:JSON.stringify(st.params||{}),2))+'</div><div class="perr" data-perr="'+esc(st.id)+'">'+(bad?'Not valid JSON object':'')+'</div>';
+      h+='<div class="grid2">'+field('Minigame',sel({...c,f:'minigameId'},[['','Choose...'],...(Object.keys(MINIGAMES).includes(st.minigameId)||!st.minigameId?Object.keys(MINIGAMES):[...Object.keys(MINIGAMES),st.minigameId]).map(m=>[m,m])],st.minigameId||''))+
+       field('Parameters (JSON object, for example {"teeth":10})',area({...c,f:'params'},bad?st.params:JSON.stringify(st.params||{}),2))+'</div><div class="perr" data-perr="'+esc(st.id)+'">'+(bad?'Not valid JSON object':'')+'</div>';
     }
   }else if(st.type==='result'){
     h+=resultHTML({...c,res:1},st.result||emptyResult());
@@ -598,9 +626,20 @@ function artistHTML(){
   if(!list.length)h+='<div class="empty">'+(S.tasks.length?'Nothing in this list.':'No tasks yet. Press "+ New task".')+'</div>';
   return h;
 }
-function exportData(){
+function selLevelId(){
+  const s=ui.sel;if(!s||!s.id)return null;
+  if(s.t==='level')return s.id;
+  if(s.t==='scene'){const f=findScene(s.id);return f&&f.lv.id}
+  if(s.t==='event'){const f=findEvent(s.id);return f&&f.lv.id}
+  return null;
+}
+function exportOk(){
+  const n=runChecks().filter(x=>x.sev==='error').length;
+  return n?confirm('There are '+n+' errors. Export anyway?'):true;
+}
+function exportData(onlyLv){
   return{schema:'bon-day-flow/2',exportedAt:new Date().toISOString(),assetBaseUrl:CFG.url?publicUrl(''):'',speakers:S.speakers,tasks:S.tasks,chapters:S.chapters.map((c,i)=>({...c,order:i+1})),
-    levels:sortedLevels().map((l,i)=>({...l,order:i+1,scenes:l.scenes.map((s,j)=>{const{hudTime,bonStart,...sr}=s;return{...sr,order:j+1,rooms:s.rooms,events:s.events.map(e=>({...e,hudTime:e.hudTime||''}))}})}))};
+    levels:sortedLevels().filter(l=>!onlyLv||l.id===onlyLv).map((l,i)=>({...l,order:i+1,scenes:l.scenes.map((s,j)=>{const{hudTime,bonStart,...sr}=s;return{...sr,order:j+1,rooms:s.rooms,events:s.events.map(e=>({...e}))}})}))};
 }
 function scriptText(levels){
   let t='';
@@ -625,7 +664,7 @@ function devHTML(){
   const data=exportData();const subset={...data,levels:data.levels.filter(l=>!ui.devLevel||l.id===ui.devLevel)};
   return '<h2>Dev view</h2><div class="bar"><div style="width:220px">'+sel({act:'devLevel'},[['','All levels'],...sortedLevels().map(l=>[l.id,(((S.chapters.find(c=>c.id===l.chapter))||{}).titleEn||'')+' / '+(l.titleEn||l.id)])],ui.devLevel)+'</div><span class="sp"></span>'+
    btn('dlZip','Download all (JSON + files, .zip)',{},'btn sm pri')+btn('dlJson','JSON only')+btn('dlTxt','Script (.txt)')+btn('copyJson','Copy JSON')+'</div><div class="hint" id="zip-msg" style="margin-bottom:6px">The zip has bon_day_flow.json, the script, and audio/vi/ and audio/en/ folders. Files are named OWNERID_field_lang.ext. Each audio entry (aud) in the JSON has a "file" path inside the zip.</div>'+
-   '<div class="card"><b>Rules</b><div class="hint">Flow: scene is complete when all its events are done. on_approach events have no fixed order and fire once. Option "next": DONE ends the event, RETRY asks again (chosen button dimmed), RESTART_EVENT replays from step 1, GOTO:&lt;step id&gt; jumps to that step. Error = errorOverride if set, else 1 when rating is bad. Stars per scene: 0 errors = 3, 1-2 = 2, 3+ = 1. Level stars = average of scene stars, rounded down. Step and option IDs never change once created.<br><b>Rooms:</b> a scene has rooms (rooms[]), left to right in array order. Gameobjects belong to a room. startRoom = room where Bon begins. Each event has a room. Room disableAfterEvent = event id; the room closes after that event is done and Bon has left it. <b>Order:</b> the order of the events array in a scene is the order they run in the game. <b>Minigame step:</b> minigameId (one of the list) and params (JSON object). <b>End step:</b> type end; when its event finishes the scene ends, then Quiz, then Lesson. Event hudTime is exported.<br>condition_param formats: event_done = event id; count_reached = variable>=N; time_elapsed = seconds; option_chosen = option id.</div></div>'+
+   '<div class="card"><b>Rules</b><div class="hint">Flow: scene is complete when all its events are done. on_approach events have no fixed order and fire once. Option "next": DONE ends the event, RETRY asks again (chosen button dimmed), RESTART_EVENT replays from step 1, GOTO:&lt;step id&gt; jumps to that step. Error = errorOverride if set, else 1 when rating is bad. Stars per scene: 0 errors = 3, 1-2 = 2, 3+ = 1. Level stars = average of scene stars, rounded down. Step and option IDs never change once created.<br><b>Rooms:</b> a scene has rooms (rooms[]), left to right in array order. Gameobjects belong to a room. startRoom = room where Bon begins. Each event has a room. Room disableAfterEvent = event id; the room closes after that event is done and Bon has left it. <b>Order:</b> the order of the events array in a scene is the order they run in the game. <b>Minigame step:</b> minigameId (one of the list) and params (JSON object). <b>End step:</b> type end; when its event finishes the scene ends, then Quiz, then Lesson.<br>condition_param formats: event_done = event id; count_reached = variable>=N; time_elapsed = seconds; option_chosen = option id.</div></div>'+
    '<details style="margin:10px 0"><summary class="hint" style="cursor:pointer">Migrations (one-time)</summary><div class="card"><div class="hint" style="margin-bottom:6px">Sets up scene MORNING_S1 with rooms Bedroom, Bathroom, Dining and the event order. A History snapshot is saved first. It does not touch any text or voice.</div><div class="bar">'+btn('applyMorning','Apply Morning room layout')+'</div></div></details>'+
    '<h2>Audio files</h2>'+assetTableHTML()+'<div class="bar">'+(SB.ready?btn('storage','Check storage')+btn('cleanStorage','Delete unused files'):'')+'<span class="hint" id="storage-msg"></span></div>'+
    '<h2>Script</h2><pre class="script">'+esc(scriptText(subset.levels))+'</pre>'+
@@ -740,6 +779,12 @@ function onField(e){
     changed();render();return;
   }
   if(!snapTaken){snapshot();snapTaken=true}
+  if(f==='minigameId'){
+    o.minigameId=val;
+    const empty=o.params===undefined||o.params===null||o.params===''||(typeof o.params==='object'&&!Object.keys(o.params).length);
+    if(empty&&MINIGAMES[val])o.params=clone(MINIGAMES[val]);
+    changed();render();return;
+  }
   if(f==='params'){
     let v;try{v=JSON.parse(val)}catch(_){v=null}
     const ok=v!==null&&typeof v==='object'&&!Array.isArray(v);
@@ -777,6 +822,7 @@ document.addEventListener('change',e=>{
     else if(a==='devLevel'){ui.devLevel=v;render()}
     else if(a==='histDoc'){ui.hist.doc=v;loadHist()}
     else if(a==='pscope'){ui.scope=v}
+    else if(a==='expScope'){ui.expScope=v}
     else if(a==='vScope'){ui.voice.scope=v;render()}
     else if(a==='vLang'){ui.voice.lang=v;render()}
     else if(a==='vGroup'){ui.voice.group=v;render()}
@@ -819,7 +865,7 @@ function quickWrite(evId){
   });
 }
 function dupStep(f,st){
-  const c=clone(st);c.id=uid(f.ev.id+'_B',f.ev.steps.map(s=>s.id));
+  const c=clone(st);c.id=nextSeqId(f.ev.steps.map(s=>s.id),f.ev.id+'_B',f.ev.steps.map(s=>s.id));
   const ids=[];c.options.forEach(o=>{o.id=uid(c.id+'_O',ids);ids.push(o.id)});
   return c;
 }
@@ -835,8 +881,10 @@ document.addEventListener('click',e=>{
     case 'checks':ui.checksOpen=!ui.checksOpen;renderChecks();break;
     case 'jump':{const x=ISSUES[+d.i];ui.tab='write';ui.sel=x.ev?{t:'event',id:x.ev}:x.sc?{t:'scene',id:x.sc}:{t:'level',id:x.lvId};ui.checksOpen=false;render();
       if(x.st){const n=[...document.querySelectorAll('#center .step')].find(s=>s.querySelector('.sid')&&s.querySelector('.sid').textContent===x.st);if(n)n.scrollIntoView({block:'center'})}break}
-    case 'export':dl('bon_day_flow.json',JSON.stringify(exportData(),null,1),'application/json');break;
-    case 'dlJson':dl('bon_day_flow.json',JSON.stringify(exportData(),null,1),'application/json');break;
+    case 'export':{if(!exportOk())break;let lid=null;
+      if(ui.expScope==='level'){lid=selLevelId();if(!lid){alert('Select a level (or something inside it) in the tree first.');break}}
+      dl(lid?'bon_day_flow_'+lid+'.json':'bon_day_flow.json',JSON.stringify(exportData(lid),null,1),'application/json');break}
+    case 'dlJson':if(exportOk())dl('bon_day_flow.json',JSON.stringify(exportData(),null,1),'application/json');break;
     case 'dlTxt':dl('bon_day_script.txt',scriptText(exportData().levels.filter(l=>!ui.devLevel||l.id===ui.devLevel)),'text/plain');break;
     case 'copyJson':{const t=JSON.stringify(exportData(),null,1);if(navigator.clipboard)navigator.clipboard.writeText(t).catch(()=>{});break}
     case 'import':$('#file').click();break;
@@ -847,7 +895,7 @@ document.addEventListener('click',e=>{
     case 'mvChapter':mutate(()=>mv(S.chapters,S.chapters.findIndex(c=>c.id===d.ch),+d.d));break;
     case 'addLevel':mutate(()=>{const id=uid('L_LEVEL',allIds('level'));S.levels.push({id,chapter:d.ch||(S.chapters[0]||{}).id,titleVi:'',titleEn:'New level',order:S.levels.length+1,description:'',lesson:'',scenes:[],quiz:[]});ui.sel={t:'level',id}});break;
     case 'addScene':mutate(()=>{const l=findLevel(d.lv);const id=uid(l.id.replace(/^L_/,'')+'_S',allIds('scene'));l.scenes.push({id,levelId:l.id,name:'New scene',background:'',rooms:[{id:id+'_R1',name:'Room 1',background:'',gameobjects:[],disableAfterEvent:''}],startRoom:id+'_R1',notes:'',events:[]});ui.sel={t:'scene',id}});break;
-    case 'addEvent':mutate(()=>{const f=findScene(d.sc);const id=uid(f.sc.id+'_E',allIds('event'));const prev=f.sc.events[f.sc.events.length-1];f.sc.events.push({id,name:'New event',trigger:'on_enter',gameobject:'',room:(prev&&prev.room)||f.sc.startRoom||(f.sc.rooms[0]&&f.sc.rooms[0].id)||'',condType:'',condParam:'',notes:'',steps:[]});ui.sel={t:'event',id}});break;
+    case 'addEvent':mutate(()=>{const f=findScene(d.sc);const id=nextSeqId(f.sc.events.map(e=>e.id),f.sc.id+'_E',allIds('event'));const prev=f.sc.events[f.sc.events.length-1];f.sc.events.push({id,name:'New event',trigger:'on_enter',gameobject:'',room:(prev&&prev.room)||f.sc.startRoom||(f.sc.rooms[0]&&f.sc.rooms[0].id)||'',condType:'',condParam:'',notes:'',steps:[]});ui.sel={t:'event',id}});break;
     case 'addRoom':mutate(()=>{const f=findScene(d.sc);const id=uid(f.sc.id+'_R',f.sc.rooms.map(r=>r.id));f.sc.rooms.push({id,name:'Room '+(f.sc.rooms.length+1),background:'',gameobjects:[],disableAfterEvent:''});if(!f.sc.startRoom)f.sc.startRoom=id});break;
     case 'delRoom':{const f=findScene(d.sc),n=f.sc.events.filter(e=>e.room===d.rm).length;if(n){alert('This room is used by '+n+' event(s). Change their room first.');break}if(confirm('Delete this room?'))mutate(()=>{f.sc.rooms=f.sc.rooms.filter(r=>r.id!==d.rm);if(f.sc.startRoom===d.rm)f.sc.startRoom=f.sc.rooms[0]?f.sc.rooms[0].id:''});break}
     case 'mvRoom':mutate(()=>{const f=findScene(d.sc);mv(f.sc.rooms,f.sc.rooms.findIndex(r=>r.id===d.rm),+d.d)});break;
@@ -880,7 +928,7 @@ document.addEventListener('click',e=>{
     case 'delTask':if(confirm('Delete this task?'))mutate(()=>{S.tasks=S.tasks.filter(x=>x.id!==d.task)});break;
     case 'playAudio':{try{const au=new Audio(publicUrl(d.path));au.play()}catch(err){}break}
     case 'signout':signOut();break;
-    case 'dlZip':downloadZip();break;
+    case 'dlZip':if(exportOk())downloadZip();break;
     case 'addSpeaker':{const v=($('#newspk').value||'').trim();if(v&&!S.speakers.includes(v))mutate(()=>{S.speakers.push(v)});else if(v)alert('That speaker already exists.');break}
     case 'delSpeaker':{const n=S.speakers[+d.i];if((speakerUse()[n]||0)>0){alert('"'+n+'" is used in '+speakerUse()[n]+' steps. Change those steps first.');break}if(confirm('Delete speaker "'+n+'"?'))mutate(()=>{S.speakers.splice(+d.i,1)});break}
     case 'histPreview':ui.hist.sel=+d.hid;render();break;
