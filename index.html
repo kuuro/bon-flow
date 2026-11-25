@@ -130,6 +130,7 @@ pre.script{background:#fff;border:1px solid var(--line);border-radius:10px;paddi
 <datalist id="dl-speakers"></datalist><datalist id="dl-go"></datalist>
 <input type="file" id="file" accept=".json,application/json" hidden>
 <input type="file" id="bulkfile" accept="audio/*,.mp3,.ogg,.m4a,.wav,.aac" multiple hidden>
+<input type="file" id="imgfile" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" hidden>
 <input type="file" id="assetfile" accept="audio/*,.mp3,.ogg,.m4a,.wav,.aac" hidden>
 <div id="login"><form id="login-form" autocomplete="on"><h2>Bon Day - Flow Writer</h2><div class="hint">Team sign-in. Ask the PM if you need an account.</div>
 <label class="fld"><span>Email</span><input id="login-email" type="email" autocomplete="username" required></label>
@@ -350,6 +351,7 @@ function runChecks(){
 function resCheck(r,m,st,add){
   if(!r.title.trim()||!r.text.trim())add('error',m+'result needs a title and text',st);
   if(r.text.length>160)add('warn',m+'result text is over 160 characters ('+r.text.length+')',st);
+  if(!(r.image&&r.image.path))add('warn',m+'result has no image',st);
 }
 
 /* ---------- html helpers ---------- */
@@ -545,6 +547,7 @@ function optHTML(f,st,o,j){
 }
 function resultHTML(c,r){
   return '<div class="res">'+bi(c,r,'title','Result title')+field('Bon expression',sel({...c,f:'expression'},EXPR,r.expression))+bi(c,r,'text','Result text',2)+bi(c,r,'tip','Tip')+
+   field('Result image (one image, same for VI and EN)',imageCtl(c,r))+
    field('Notes (for dev, art and content)',area({...c,f:'notes'},r.notes||'',2))+'</div>';
 }
 /* bilingual field: VI + EN text, each with its own audio upload */
@@ -666,7 +669,7 @@ function devHTML(){
    btn('dlZip','Download all (JSON + files, .zip)',{},'btn sm pri')+btn('dlJson','JSON only')+btn('dlTxt','Script (.txt)')+btn('copyJson','Copy JSON')+'</div><div class="hint" id="zip-msg" style="margin-bottom:6px">The zip has bon_day_flow.json, the script, and audio/vi/ and audio/en/ folders. Files are named OWNERID_field_lang.ext. Each audio entry (aud) in the JSON has a "file" path inside the zip.</div>'+
    '<div class="card"><b>Rules</b><div class="hint">Flow: scene is complete when all its events are done. on_approach events have no fixed order and fire once. Option "next": DONE ends the event, RETRY asks again (chosen button dimmed), RESTART_EVENT replays from step 1, GOTO:&lt;step id&gt; jumps to that step. Error = errorOverride if set, else 1 when rating is bad. Stars per scene: 0 errors = 3, 1-2 = 2, 3+ = 1. Level stars = average of scene stars, rounded down. Step and option IDs never change once created.<br><b>Rooms:</b> a scene has rooms (rooms[]), left to right in array order. Gameobjects belong to a room. startRoom = room where Bon begins. Each event has a room. Room disableAfterEvent = event id; the room closes after that event is done and Bon has left it. <b>Order:</b> the order of the events array in a scene is the order they run in the game. <b>Minigame step:</b> minigameId (one of the list) and params (JSON object). <b>End step:</b> type end; when its event finishes the scene ends, then Quiz, then Lesson.<br>condition_param formats: event_done = event id; count_reached = variable>=N; time_elapsed = seconds; option_chosen = option id.</div></div>'+
    '<details style="margin:10px 0"><summary class="hint" style="cursor:pointer">Migrations (one-time)</summary><div class="card"><div class="hint" style="margin-bottom:6px">Sets up scene MORNING_S1 with rooms Bedroom, Bathroom, Dining and the event order. A History snapshot is saved first. It does not touch any text or voice.</div><div class="bar">'+btn('applyMorning','Apply Morning room layout')+'</div></div></details>'+
-   '<h2>Audio files</h2>'+assetTableHTML()+'<div class="bar">'+(SB.ready?btn('storage','Check storage')+btn('cleanStorage','Delete unused files'):'')+'<span class="hint" id="storage-msg"></span></div>'+
+   '<h2>Audio and image files</h2>'+assetTableHTML()+'<div class="bar">'+(SB.ready?btn('storage','Check storage')+btn('cleanStorage','Delete unused files'):'')+'<span class="hint" id="storage-msg"></span></div>'+
    '<h2>Script</h2><pre class="script">'+esc(scriptText(subset.levels))+'</pre>'+
    '<h2>JSON</h2><pre class="script">'+esc(JSON.stringify(subset,null,1))+'</pre>';
 }
@@ -692,7 +695,7 @@ function stageHTML(p){
   let inner='';
   if(p.res){
     const r=p.res.r;const col=p.res.rating==='good'?'var(--good)':p.res.rating==='fair'?'var(--fair)':'var(--bad)';
-    inner='<div class="pres" style="--c:'+col+'">'+playBtns(r,'text')+'<span class="rb" style="background:'+col+'">'+esc(p.res.rating)+'</span><h3>'+esc(r.title)+'</h3><p>'+esc(r.text)+'</p>'+(r.tip?'<div class="tip">'+esc(r.tip)+'</div>':'')+'<div class="pbtns"><button class="pb go" data-act="pres">Continue</button></div><div class="pmeta">Bon: '+esc(r.expression)+(r.notes?' | '+esc(r.notes):'')+'</div></div>';
+    inner='<div class="pres" style="--c:'+col+'">'+playBtns(r,'text')+'<span class="rb" style="background:'+col+'">'+esc(p.res.rating)+'</span>'+resImg(r)+'<h3>'+esc(r.title)+'</h3><p>'+esc(r.text)+'</p>'+(r.tip?'<div class="tip">'+esc(r.tip)+'</div>':'')+'<div class="pbtns"><button class="pb go" data-act="pres">Continue</button></div><div class="pmeta">Bon: '+esc(r.expression)+(r.notes?' | '+esc(r.notes):'')+'</div></div>';
   }else if(!st){
     inner='<div class="dlgp"><div class="ptx">Event complete: '+esc(f.ev.name)+'</div><div class="pbtns"><button class="pb go" data-act="pnext">Continue</button></div></div>';
   }else if(st.type==='say'||st.type==='ask'){
@@ -706,7 +709,7 @@ function stageHTML(p){
     inner='<div class="pdesc"><div class="pbox'+(st.type==='cutscene'?' cut':'')+'"><b>'+TL[st.type]+'</b>\n'+esc(st.text)+'</div><div class="pbtns"><button class="pb go" data-act="pnext">'+(st.type==='minigame'?'Finish minigame':'Continue')+'</button></div></div>';
   }else if(st.type==='result'&&st.result){
     const r=st.result;
-    inner='<div class="pres" style="--c:var(--fair)">'+playBtns(r,'text')+'<h3>'+esc(r.title)+'</h3><p>'+esc(r.text)+'</p>'+(r.tip?'<div class="tip">'+esc(r.tip)+'</div>':'')+'<div class="pbtns"><button class="pb go" data-act="pnext">Continue</button></div><div class="pmeta">Bon: '+esc(r.expression)+(r.notes?' | '+esc(r.notes):'')+'</div></div>';
+    inner='<div class="pres" style="--c:var(--fair)">'+playBtns(r,'text')+''+resImg(r)+'<h3>'+esc(r.title)+'</h3><p>'+esc(r.text)+'</p>'+(r.tip?'<div class="tip">'+esc(r.tip)+'</div>':'')+'<div class="pbtns"><button class="pb go" data-act="pnext">Continue</button></div><div class="pmeta">Bon: '+esc(r.expression)+(r.notes?' | '+esc(r.notes):'')+'</div></div>';
   }
   const errs=Object.values(p.errors).reduce((a,b)=>a+b,0);
   return '<div class="stage">'+head+inner+'</div><div class="pmeta">Event '+(p.ei+1)+' of '+p.list.length+' | errors so far: '+errs+'</div>';
@@ -923,6 +926,8 @@ document.addEventListener('click',e=>{
     case 'vCopy':voiceCopy(+d.g,d.l,el);break;
     case 'vBulk':$('#bulkfile').click();break;
     case 'upload':pendingUpload={...d};delete pendingUpload.act;$('#assetfile').click();break;
+    case 'uploadImg':pendingImage={...d};delete pendingImage.act;$('#imgfile').click();break;
+    case 'delImage':{const o=target(d);if(o&&o.image)mutate(()=>{delete o.image});break}
     case 'delAudio':{const o=target(d);if(o&&o.aud&&o.aud[d.k])mutate(()=>{delete o.aud[d.k]});break}
     case 'addTask':mutate(()=>{S.tasks.unshift({id:'T_'+Date.now().toString(36),title:'',desc:'',done:false,link:''});ui.artFilter=ui.artFilter==='done'?'all':ui.artFilter});break;
     case 'delTask':if(confirm('Delete this task?'))mutate(()=>{S.tasks=S.tasks.filter(x=>x.id!==d.task)});break;
@@ -948,7 +953,7 @@ document.addEventListener('click',e=>{
 document.addEventListener('keydown',e=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'&&!['INPUT','TEXTAREA'].includes(document.activeElement.tagName)){e.preventDefault();undo()}
 });
-let pendingUpload=null;
+let pendingUpload=null,pendingImage=null;
 (function(){
   const tr=document.getElementById('tree');let dragId=null;
   const clr=()=>tr.querySelectorAll('.dragover').forEach(x=>x.classList.remove('dragover'));
@@ -960,6 +965,7 @@ let pendingUpload=null;
   tr.addEventListener('dragend',()=>{dragId=null;clr()});
 })();
 $('#bulkfile').addEventListener('change',e=>{const fs=[...e.target.files];e.target.value='';voiceBulk(fs)});
+$('#imgfile').addEventListener('change',e=>{const fl=[...e.target.files];e.target.value='';if(fl.length&&pendingImage)uploadImage(pendingImage,fl[0])});
 $('#assetfile').addEventListener('change',e=>{
   const fl=[...e.target.files];e.target.value='';
   if(fl.length&&pendingUpload)uploadAudio(pendingUpload,fl[0]);
@@ -1310,12 +1316,12 @@ function zipName(owner,k,a){
   return 'audio/'+lang+'/'+slug(owner)+'_'+base+'_'+lang+'.'+ext;
 }
 function assetTableHTML(){
-  const rows=[];eachAudio((a,owner,k,where,lv)=>rows.push([lv,where,k,a]));
-  if(!rows.length)return '<div class="hint">No audio uploaded yet.</div>';
+  const rows=[];eachAudio((a,owner,k,where,lv)=>rows.push([lv,where,k,a]));eachImage((a,owner,where,lv)=>rows.push([lv,where,'result image',a]));
+  if(!rows.length)return '<div class="hint">No audio or images uploaded yet.</div>';
   return '<table><tr><th>Level</th><th>Where</th><th>Field</th><th>File</th><th>Size</th></tr>'+rows.map(([lv,w,k,a])=>'<tr><td>'+esc(lv)+'</td><td>'+esc(w)+'</td><td>'+esc(k)+'</td><td><a href="'+publicUrl(a.path)+'" target="_blank" rel="noopener">'+esc(a.name)+'</a></td><td>'+(a.size?(a.size/1024).toFixed(0)+' KB':'')+'</td></tr>').join('')+'</table>';
 }
 async function storageReport(clean){
-  const sb=SB.client.storage.from(BUCKET),used=new Set();eachAudio(a=>used.add(a.path));
+  const sb=SB.client.storage.from(BUCKET),used=new Set();eachAudio(a=>used.add(a.path));eachImage(a=>used.add(a.path));
   const top=await sb.list('',{limit:1000});if(top.error)throw top.error;
   let total=0,orphans=[];
   for(const f of top.data){
@@ -1354,11 +1360,11 @@ async function downloadZip(){
   const say=t=>{const m=$('#zip-msg');if(m)m.textContent=t},enc=new TextEncoder();
   const data=exportData();
   const levels=JSON.parse(JSON.stringify(data.levels.filter(l=>!ui.devLevel||l.id===ui.devLevel)));
-  const list=[];eachAudio((a,owner,k)=>{a.file=zipName(owner,k,a);list.push(a)},levels);
+  const list=[];eachAudio((a,owner,k)=>{a.file=zipName(owner,k,a);list.push(a)},levels);eachImage((a,owner)=>{a.file=imgZipName(owner,a);list.push(a)},levels);
   const files=[{name:'bon_day_flow.json',data:enc.encode(JSON.stringify({...data,levels},null,1))},{name:'bon_day_script.txt',data:enc.encode(scriptText(levels))}];
   const cache=new Map(),fail=[];let i=0;
   for(const a of list){
-    say('Downloading audio '+(++i)+'/'+list.length+'...');
+    say('Downloading file '+(++i)+'/'+list.length+'...');
     try{
       let b=cache.get(a.path);
       if(!b){const r=await fetch(publicUrl(a.path));if(!r.ok)throw new Error(r.status);b=new Uint8Array(await r.arrayBuffer());cache.set(a.path,b)}
@@ -1367,7 +1373,7 @@ async function downloadZip(){
   }
   if(fail.length)files.push({name:'MISSING_FILES.txt',data:enc.encode(fail.join('\n'))});
   dl('bon_day_flow_'+new Date().toISOString().slice(0,10)+'.zip',makeZip(files),'application/zip');
-  say('Done: '+(list.length-fail.length)+' audio files'+(fail.length?', '+fail.length+' could not be downloaded (see MISSING_FILES.txt)':'')+'.');
+  say('Done: '+(list.length-fail.length)+' audio and image files'+(fail.length?', '+fail.length+' could not be downloaded (see MISSING_FILES.txt)':'')+'.');
 }
 
 /* ---------- version history (restore from the server snapshots) ---------- */
@@ -1563,6 +1569,38 @@ async function applyMorning(){
   });
   alert('Morning room layout applied.'+(notes.length?'\n\n'+notes.join('\n'):''));
 }
+
+/* ---------- result image: one image per result screen, no language ---------- */
+function resImg(r){
+  if(!r||!r.image||!r.image.path)return '';
+  try{return '<img src="'+publicUrl(r.image.path)+'" style="display:block;max-width:100%;max-height:180px;margin:0 auto 8px;border-radius:8px" alt="">'}catch(e){return ''}
+}
+function imageCtl(c,r){
+  const im=r&&r.image;
+  if(!SB.ready)return '<div class="hint">Sign in to upload an image.</div>';
+  if(!im||!im.path)return '<div class="aud"><button class="btn sm" data-act="uploadImg" '+A(c)+'>+ Image</button><span class="hint">png, jpg, webp or gif, up to 20 MB</span></div>';
+  return '<div class="aud"><a href="'+publicUrl(im.path)+'" target="_blank" rel="noopener"><img src="'+publicUrl(im.path)+'" style="height:72px;max-width:160px;object-fit:contain;border:1px solid #dde1ea;border-radius:6px;background:#fff" alt=""></a><span class="aname" title="'+esc(im.name)+'">'+esc(im.name)+'</span>'+ib('uploadImg','Replace',c)+ib('delImage','Remove',c,true)+'</div>';
+}
+async function uploadImage(d,file){
+  if(!SB.ready){alert('Sign in first.');return}
+  if(!(/^image\/(png|jpe?g|webp|gif)$/.test(file.type)||/\.(png|jpe?g|webp|gif)$/i.test(file.name))){alert('Images only (png, jpg, webp, gif).');return}
+  if(file.size>20*1024*1024){alert(file.name+' is over 20 MB.');return}
+  const path=slug(levelOfTarget(d))+'/img-'+KID()+'-'+slug(file.name),prev=SB.status;
+  setStatus('saving');
+  const{error}=await SB.client.storage.from(BUCKET).upload(path,file,{contentType:file.type||'image/png',cacheControl:'3600'});
+  if(error){alert('Upload failed: '+error.message);setStatus(prev);return}
+  const o=target(d);if(!o){setStatus(prev);return}
+  snapshot();o.image={path,name:file.name,size:file.size};
+  changed();renderKeepFocus();
+}
+function eachImage(cb,levels){
+  (levels||S.levels).forEach(lv=>(lv.scenes||[]).forEach(sc=>(sc.events||[]).forEach(ev=>(ev.steps||[]).forEach(st=>{
+    const w=(sc.name||sc.id)+' / '+(ev.name||ev.id)+' / '+st.id,ln=lv.titleEn||lv.id;
+    if(st.result&&st.result.image&&st.result.image.path)cb(st.result.image,st.id+'_result',w+' result',ln);
+    (st.options||[]).forEach(o=>{if(o.result&&o.result.image&&o.result.image.path)cb(o.result.image,o.id+'_result',w+' / '+o.id+' result',ln)});
+  }))));
+}
+const imgZipName=(owner,a)=>{const m=String(a.name||a.path).match(/\.(\w+)$/);return 'images/'+slug(owner)+'.'+((m?m[1]:'png').toLowerCase())};
 
 load();ensureSel();render();
 initSync();
